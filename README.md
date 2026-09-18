@@ -88,3 +88,38 @@ trade extra computation for lower peak memory. Start with the simple scan,
 then add rematerialization or truncated backpropagation only after profiling.
 
 JAX should be introduced after these NumPy reference functions are tested. The reference implementation is the correctness oracle for the later `jax.numpy` implementation.
+
+## One-file control panel
+
+Edit [run_experiment.py](run_experiment.py) and change only the `KNOBS`
+section near the top. Then run:
+
+```powershell
+python from_scratch/run_experiment.py
+```
+
+`MODE` selects the operation:
+
+```text
+calibrate       derive and print system calibration
+trial           run one chosen set-size trial
+train           optimise B, W, F, and tau with Optax
+performance     average loss over set sizes 1..MAX_ITEMS
+weight_analysis inspect shapes, norms, and effective Dale-signed W
+save_weights    save the selected weights as results/weights.npz
+```
+
+`WEIGHTS_SOURCE` is either `initialize` for reproducible fresh weights or
+`file` for a `.npz` produced by this runner. `LOSS_TYPE` accepts `angular`,
+`euclidean`, `rooted_euclidean`, `exponential`, or `custom`. For a custom loss,
+set `LOSS_TYPE = "custom"` and edit `CUSTOM_LOSS` while preserving:
+
+```python
+CUSTOM_LOSS(predicted_output, target_output, presence) -> scalar_jax_value
+```
+
+`NOISE_TYPE` and `NOISE_FACTOR` control the end/final recurrent and readout
+noise. `SENSORY_NOISE_RAD` controls input-angle noise. `TRAIN_NOISE_TYPE` and
+`TRAIN_NOISE_FACTOR` can differ from evaluation noise when `MODE = "train"`.
+`SAVE_TRIAL`, `SAVE_WEIGHTS`, and `SAVE_RESULTS` control artifacts in
+`from_scratch/results/`.
