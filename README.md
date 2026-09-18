@@ -29,9 +29,35 @@ from_scratch/
 ├── src/vwm_scratch/
 │   ├── calibration.py       # Derived dimensions, timing, encoding, noise
 │   └── equations.py         # Pure mathematical functions
+│   └── weights.py           # B, W, F matrices and node-link operations
 ├── scripts/calibrate.py     # Human-readable calibration entry point
 ├── tests/test_calibration.py
 └── calibration_reports/
 ```
+
+## Weight conventions
+
+The first model-building layer is `src/vwm_scratch/weights.py`:
+
+```text
+B: [neurons, input_dim]   input -> neuron connections
+W: [neurons, neurons]     recurrent neuron -> neuron connections
+F: [output_dim, neurons]  neuron -> output connections
+tau: [neurons]             one time constant per neuron
+dale_sign: [neurons]       sign of each source neuron's output
+```
+
+For a state stored as `[batch, neurons]`, the operations are:
+
+```text
+external_input = inputs @ B.T
+recurrent_input = state @ effective_W.T
+readout = state @ F.T
+```
+
+`effective_W` applies Dale's law by signing recurrent matrix columns. The
+`WeightMatrices` type validates these dimensions and exposes the operations as
+functions, without depending on PyTorch or JAX. JAX can use the same structure
+after the reference behavior is verified.
 
 JAX should be introduced after these NumPy reference functions are tested. The reference implementation is the correctness oracle for the later `jax.numpy` implementation.
