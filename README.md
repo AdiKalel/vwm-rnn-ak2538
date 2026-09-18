@@ -87,6 +87,14 @@ somewhere, but JAX can rematerialize them with `jax.checkpoint`/`jax.remat` to
 trade extra computation for lower peak memory. Start with the simple scan,
 then add rematerialization or truncated backpropagation only after profiling.
 
+The JAX step matches the original dynamics: signed recurrent columns, the
+saturating `30 * (1 + tanh(0.14*x - 4.2))` activation, Euler integration
+`r_next = r + dt * (-r + rate) / tau`, and noisy readout from the updated
+state. Supported noise modes are `gamma`, `gaussian`, `puregauss`, `csnr`, and
+`none`, with the same parameter equations as the original implementation.
+`compiled_trial(...)` makes the static timing/noise settings compile-time
+constants for fast repeated evaluation.
+
 JAX should be introduced after these NumPy reference functions are tested. The reference implementation is the correctness oracle for the later `jax.numpy` implementation.
 
 ## One-file control panel

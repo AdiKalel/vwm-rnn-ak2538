@@ -78,7 +78,8 @@ DECODE_MS = 500.0
 
 # Noise knobs. NOISE_FACTOR is the end/final spike-noise level.
 # Set NOISE_TYPE = "none" and NOISE_FACTOR = 0.0 for deterministic dynamics.
-# "gamma" matches the report; "gaussian" is an alternative rate-dependent model.
+# "gamma" matches the report. Other equivalent legacy choices are "gaussian",
+# "puregauss", and "csnr"; "none" disables neuron noise.
 NOISE_TYPE = "none"
 NOISE_FACTOR = 0.0
 SENSORY_NOISE_RAD = 0.0
@@ -195,10 +196,10 @@ def _loss_from_result(jnp, result, theta, presence, loss_fn):
 def _run_trial(weights, set_size=SET_SIZE, seed=RANDOM_SEED):
     jax, jnp, _ = _jax()
     from vwm_scratch.losses import get_loss
-    from vwm_scratch.trial import run_trial
+    from vwm_scratch.trial import compiled_trial
 
     key, theta, presence, inputs, initial_state = _trial_data(jax, jnp, set_size, seed)
-    result = run_trial(
+    result = compiled_trial(
         weights, inputs, initial_state, DT_MS,
         saturation_rate_hz=SATURATION_RATE_HZ,
         noise_type=NOISE_TYPE, noise_factor=NOISE_FACTOR, key=key,

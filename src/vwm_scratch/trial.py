@@ -41,7 +41,16 @@ def _observed_state(key, rates, noise_type: str, noise_factor: float, dt_ms: flo
     if noise_type == "gaussian":
         noise = noise_factor * jnp.sqrt(rates * 1000.0 / dt_ms + 1e-10)
         return jnp.maximum(rates + noise * jax.random.normal(key, rates.shape), 0.0)
-    raise ValueError("noise_type must be 'none', 'gamma', or 'gaussian'")
+    if noise_type == "puregauss":
+        noise = noise_factor * 15.0 * jax.random.normal(key, rates.shape)
+        return jnp.maximum(rates + noise, 0.0)
+    if noise_type == "csnr":
+        r0 = 5.0
+        kappa = (r0 * dt_ms / 1000.0) / noise_factor**2
+        shape = jnp.full_like(rates, kappa)
+        rate = kappa / jnp.maximum(rates, 1e-10)
+        return jax.random.gamma(key, shape) / rate
+    raise ValueError("noise_type must be 'none', 'gamma', 'gaussian', 'puregauss', or 'csnr'")
 
 
 def run_trial(
@@ -150,3 +159,26 @@ def value_and_grad_trial_loss(*args, **kwargs):
     """Return a JAX value-and-gradient function over the weight pytree."""
     jax, _ = _jax()
     return jax.value_and_grad(lambda weights: trial_loss(weights, *args, **kwargs)[0])
+
+
+def compiled_trial(
+    weights,
+    inputs,
+    initial_state,
+    dt_ms: float,
+    saturation_rate_hz: float = 60.0,
+    noise_type: str = "none",
+    noise_factor: float = 0.0,
+    key=None,
+    store_states: bool = True,
+):
+    """JIT-compiled trial; configuration values are compile-time constants."""
+    jax, _ = _jax()
+    compiled = jax.jit(
+        run_trial,
+        static_argnames=("dt_ms", "saturation_rate_hz", "noise_type", "noise_factor", "store_states"),
+    )
+    return compiled(
+        weights, inputs, initial_state, dt_ms, saturation_rate_hz,
+        noise_type, noise_factor, key, store_states,
+    )

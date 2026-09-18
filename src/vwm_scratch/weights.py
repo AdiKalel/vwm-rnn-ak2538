@@ -146,6 +146,12 @@ def initialize_weights(
     F = rng.normal(0.0, readout_scale, size=(output_dim, neurons))
     tau = np.exp(rng.uniform(np.log(tau_min), np.log(tau_max), size=neurons))
     dale_sign = np.ones(neurons) if not dale_law else np.where(np.arange(neurons) < neurons // 2, 1.0, -1.0)
+    if dale_law:
+        excitatory = neurons // 2
+        tau[:excitatory] = np.sort(tau[:excitatory])
+        tau[excitatory:] = np.sort(tau[excitatory:])
+    else:
+        tau = np.sort(tau)
 
     weights = WeightMatrices(B=B, W=W, F=F, tau=tau, dale_sign=dale_sign)
     weights.validate()
