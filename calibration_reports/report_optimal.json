@@ -1,0 +1,51 @@
+{
+  "generated_at": "2026-09-18T12:08:05.996444+00:00",
+  "config": "C:\\Users\\arkal\\vwm_rnn\\from_scratch\\configs\\report_optimal.yaml",
+  "name": "report_optimal",
+  "model": {
+    "max_items": 10,
+    "neurons": 64,
+    "dt_ms": 10.0,
+    "tau_min_ms": 50.0,
+    "tau_max_ms": 300.0,
+    "positive_input": true,
+    "dale_law": true,
+    "saturation_rate_hz": 60.0
+  },
+  "experiment": {
+    "input_strength": 120.0,
+    "sensory_noise_rad": 0.0,
+    "spike_noise_type": "gamma",
+    "spike_noise_factor": 0.2,
+    "init_ms": 20.0,
+    "stimulus_ms": 500.0,
+    "delay_ms": 1000.0,
+    "decode_ms": 500.0
+  },
+  "derived": {
+    "input_dim": 30,
+    "output_dim": 20,
+    "simulation_steps": 202,
+    "phase_indices": {
+      "init": [
+        0,
+        2
+      ],
+      "stimulus": [
+        2,
+        52
+      ],
+      "delay": [
+        52,
+        152
+      ],
+      "decode": [
+        152,
+        202
+      ]
+    },
+    "gamma_rate_constant": 0.24999999999999994,
+    "positive_encoding_min": 0.2928932188134525,
+    "positive_encoding_max": 1.7071067811865475
+  }
+}
