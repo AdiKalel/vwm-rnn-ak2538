@@ -30,6 +30,7 @@ from_scratch/
 │   ├── calibration.py       # Derived dimensions, timing, encoding, noise
 │   └── equations.py         # Pure mathematical functions
 │   └── weights.py           # B, W, F matrices and node-link operations
+│   └── trial.py             # Single-trial JAX scan, readout, and loss
 ├── scripts/calibrate.py     # Human-readable calibration entry point
 ├── tests/test_calibration.py
 └── calibration_reports/
@@ -59,5 +60,31 @@ readout = state @ F.T
 `WeightMatrices` type validates these dimensions and exposes the operations as
 functions, without depending on PyTorch or JAX. JAX can use the same structure
 after the reference behavior is verified.
+
+## Single-trial dynamics
+
+`src/vwm_scratch/trial.py` provides `run_trial(...)`, which takes weights,
+`inputs[time, input_dim]`, an initial state, time constants stored in the
+weights, and an explicit JAX random key. It returns readouts, the final state,
+and optionally the full state trajectory. `trial_loss(...)` wraps the same run
+with decode-window averaging and masked circular angular error.
+
+Example shape contract:
+
+```text
+inputs       [time, input_dim]
+initial      [neurons]
+states       [time, neurons]       optional
+readouts     [time, output_dim]
+final_state  [neurons]
+decoded      [max_items]
+```
+
+The dynamics use `jax.lax.scan`, so the recurrent state is carried one step at
+a time. For training, use `store_states=False` when the loss only needs the
+decode readouts. Reverse-mode differentiation still needs intermediate values
+somewhere, but JAX can rematerialize them with `jax.checkpoint`/`jax.remat` to
+trade extra computation for lower peak memory. Start with the simple scan,
+then add rematerialization or truncated backpropagation only after profiling.
 
 JAX should be introduced after these NumPy reference functions are tested. The reference implementation is the correctness oracle for the later `jax.numpy` implementation.
