@@ -99,23 +99,21 @@ JAX should be introduced after these NumPy reference functions are tested. The r
 
 ## One-file control panel
 
-Edit [run_experiment.py](run_experiment.py) and change only the `KNOBS`
-section near the top. Then run:
+Edit the `KNOBS` section near the top of [run_experiment.py](run_experiment.py),
+then import and call the function you need:
 
-```powershell
-python from_scratch/run_experiment.py
+```python
+from run_experiment import train, save_weights, run_trial
+
+weights, history = train()
+save_weights(weights, "from_scratch/weights/my_run.npz")
+error = run_trial.eloss(weights=weights, set_size=3)
 ```
 
-`MODE` selects the operation:
-
-```text
-calibrate       derive and print system calibration
-trial           run one chosen set-size trial
-train           optimise B, W, F, and tau with Optax
-performance     average loss over set sizes 1..MAX_ITEMS
-weight_analysis inspect shapes, norms, and effective Dale-signed W
-save_weights    save the selected weights as results/weights.npz
-```
+`train()` prints progress and saves/shows a training-loss graph. `save_weights()`
+saves an explicitly supplied weight pytree. `run_trial()` returns the full
+report, while `run_trial.tloss()`, `run_trial.aloss()`, and `run_trial.eloss()`
+return total, activation, and prediction/error loss respectively.
 
 `WEIGHTS_SOURCE` is either `initialize` for reproducible fresh weights or
 `file` for a `.npz` produced by this runner. `LOSS_TYPE` accepts `angular`,
@@ -128,9 +126,7 @@ CUSTOM_LOSS(predicted_output, target_output, presence) -> scalar_jax_value
 
 `NOISE_TYPE` and `NOISE_FACTOR` control the end/final recurrent and readout
 noise. `SENSORY_NOISE_RAD` controls input-angle noise. `TRAIN_NOISE_TYPE` and
-`TRAIN_NOISE_FACTOR` can differ from evaluation noise when `MODE = "train"`.
-`SAVE_TRIAL`, `SAVE_WEIGHTS`, and `SAVE_RESULTS` control artifacts in
-`from_scratch/results/`.
+`TRAIN_NOISE_FACTOR` can differ from evaluation noise when calling `train()`.
 
 Trial reports distinguish `theta_all_slots` from `theta_present_slots` because
 the simulator stores one angle for every possible output slot but calculates
@@ -142,10 +138,9 @@ needs the state trajectory; set it to false only when `LAMBDA_REG = 0`.
 
 ## Analysis condition sweeps
 
-Use `run_analysis_trial` from `run_experiment.py` when writing a custom
-analysis loop. It uses the current default trial conditions unless a keyword is
-overridden, and returns a dictionary containing `error_loss`,
-`activation_loss`, `total_loss`, predictions, and the conditions used.
+Use `run_trial.aloss`, `run_trial.eloss`, or `run_trial.tloss` from
+`run_experiment.py` when writing a custom analysis loop. They use the current
+default trial conditions unless a keyword is overridden.
 
 ```python
 import matplotlib.pyplot as plt
@@ -158,13 +153,10 @@ activation_loss = []
 error_loss = []
 
 for i, noise in enumerate(noise_levels):
-	result = experiment.run_analysis_trial(
-		weights=weights,
-		noise_factor=noise,
-		seed=experiment.RANDOM_SEED + i,
-	)
-	activation_loss.append(result["activation_loss"])
-	error_loss.append(result["error_loss"])
+	activation_loss.append(experiment.run_trial.aloss(
+		weights=weights, noise_factor=noise, seed=experiment.RANDOM_SEED + i))
+	error_loss.append(experiment.run_trial.eloss(
+		weights=weights, noise_factor=noise, seed=experiment.RANDOM_SEED + i))
 
 plt.plot(noise_levels, activation_loss, label="activation loss")
 plt.plot(noise_levels, error_loss, label="error loss")
