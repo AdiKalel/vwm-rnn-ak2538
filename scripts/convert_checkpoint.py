@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import yaml
 
 
 def sha256(path: Path) -> str:
@@ -36,6 +37,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--config", type=Path, help="Original YAML config paired with the checkpoint")
+    parser.add_argument("--label", help="Human-readable label for this pretrained run")
     args = parser.parse_args()
 
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -55,11 +58,21 @@ def main() -> None:
     np.savez(args.output, **arrays)
 
     metadata = {
+        "label": args.label or args.output.stem,
         "source_checkpoint": str(args.checkpoint.resolve()),
         "source_sha256": sha256(args.checkpoint),
         "output": str(args.output.resolve()),
         "arrays": {name: {"shape": list(value.shape), "dtype": str(value.dtype)} for name, value in arrays.items()},
     }
+    if args.config:
+        with args.config.open() as file_handle:
+            config = yaml.safe_load(file_handle)
+        metadata["source_config"] = str(args.config.resolve())
+        metadata["conditions"] = {
+            "model": config.get("model_params", {}),
+            "training": config.get("training_params", {}),
+            "logging": config.get("model_and_logging_params", {}),
+        }
     metadata_path = args.output.with_suffix(".json")
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     print(json.dumps(metadata, indent=2))

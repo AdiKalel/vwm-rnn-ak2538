@@ -38,8 +38,8 @@ MODE = "trial"
 WEIGHTS_SOURCE = "initialize"
 # To use the committed pretrained report weights, change the two lines to:
 #   WEIGHTS_SOURCE = "file"
-#   WEIGHTS_PATH = "from_scratch/weights/optimal_model_iteration11650.npz"
-WEIGHTS_PATH = "from_scratch/weights/optimal_model_iteration11650.npz"
+#   WEIGHTS_PATH = "from_scratch/weights/derek_optimal_l2_n64_gamma02.npz"
+WEIGHTS_PATH = "from_scratch/weights/derek_optimal_l2_n64_gamma02.npz"
 INITIALIZATION_SEED = 7
 
 # Choose one loss. These are minimised by training:
@@ -137,7 +137,17 @@ def _weights():
         return {name: jnp.asarray(getattr(source, name)) for name in ("B", "W", "F", "tau", "dale_sign")}
     if WEIGHTS_SOURCE == "file":
         data = np.load(WEIGHTS_PATH)
-        return {name: jnp.asarray(data[name]) for name in ("B", "W", "F", "tau", "dale_sign")}
+        weights = {name: jnp.asarray(data[name]) for name in ("B", "W", "F", "tau", "dale_sign")}
+        expected_input_dim = MAX_ITEMS * (3 if POSITIVE_INPUT else 2)
+        expected_output_dim = MAX_ITEMS * 2
+        if weights["B"].shape != (NEURONS, expected_input_dim):
+            raise ValueError(
+                f"{WEIGHTS_PATH} has B shape {weights['B'].shape}; set NEURONS={weights['B'].shape[0]} "
+                f"and MAX_ITEMS={weights['B'].shape[1] // (3 if POSITIVE_INPUT else 2)}"
+            )
+        if weights["F"].shape != (expected_output_dim, NEURONS):
+            raise ValueError(f"{WEIGHTS_PATH} has F shape {weights['F'].shape}; check NEURONS and MAX_ITEMS")
+        return weights
     raise ValueError("WEIGHTS_SOURCE must be 'initialize' or 'file'")
 
 
