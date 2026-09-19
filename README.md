@@ -131,3 +131,29 @@ noise. `SENSORY_NOISE_RAD` controls input-angle noise. `TRAIN_NOISE_TYPE` and
 `TRAIN_NOISE_FACTOR` can differ from evaluation noise when `MODE = "train"`.
 `SAVE_TRIAL`, `SAVE_WEIGHTS`, and `SAVE_RESULTS` control artifacts in
 `from_scratch/results/`.
+
+## Selecting pretrained weights
+
+A converted copy of the report's optimal PyTorch checkpoint is included at:
+
+```text
+weights/optimal_model_iteration11650.npz
+```
+
+To run the from-scratch code with it, change these two knobs in
+`run_experiment.py`:
+
+```python
+WEIGHTS_SOURCE = "file"
+WEIGHTS_PATH = "from_scratch/weights/optimal_model_iteration11650.npz"
+```
+
+The file contains `B`, `W`, `F`, `tau`, and `dale_sign`. Provenance and the
+source checkpoint hash are recorded in the adjacent JSON metadata file. To
+convert another original `.pth` checkpoint, run:
+
+```powershell
+python from_scratch/scripts/convert_checkpoint.py `
+	--checkpoint path/to/model_iterationXXXX.pth `
+	--output from_scratch/weights/my_weights.npz
+```

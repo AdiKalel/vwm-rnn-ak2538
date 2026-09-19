@@ -1,0 +1,40 @@
+{
+  "source_checkpoint": "C:\\Users\\arkal\\vwm_rnn\\final_report\\OptimalModel_check_n64item10PI1gamma0.2l2\\models\\model_iteration11650.pth",
+  "source_sha256": "edd3845869a152512f89a1db21773c1682451dfa7dd7e2e96e68e960467c2a24",
+  "output": "C:\\Users\\arkal\\vwm_rnn\\from_scratch\\weights\\optimal_model_iteration11650.npz",
+  "arrays": {
+    "B": {
+      "shape": [
+        64,
+        30
+      ],
+      "dtype": "float32"
+    },
+    "W": {
+      "shape": [
+        64,
+        64
+      ],
+      "dtype": "float32"
+    },
+    "F": {
+      "shape": [
+        20,
+        64
+      ],
+      "dtype": "float32"
+    },
+    "tau": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "dale_sign": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    }
+  }
+}

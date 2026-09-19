@@ -34,9 +34,12 @@ MODE = "trial"
 
 # Choose where weights come from.
 #   "initialize"      make deterministic weights from INITIALIZATION_SEED
-#   "file"            load a .npz file produced by SAVE_WEIGHTS or this script
+#   "file"            load a converted/trained .npz file from WEIGHTS_PATH
 WEIGHTS_SOURCE = "initialize"
-WEIGHTS_PATH = "from_scratch/results/weights.npz"
+# To use the committed pretrained report weights, change the two lines to:
+#   WEIGHTS_SOURCE = "file"
+#   WEIGHTS_PATH = "from_scratch/weights/optimal_model_iteration11650.npz"
+WEIGHTS_PATH = "from_scratch/weights/optimal_model_iteration11650.npz"
 INITIALIZATION_SEED = 7
 
 # Choose one loss. These are minimised by training:
