@@ -35,11 +35,11 @@ MODE = "trial"
 # Choose where weights come from.
 #   "initialize"      make deterministic weights from INITIALIZATION_SEED
 #   "file"            load a converted/trained .npz file from WEIGHTS_PATH
-WEIGHTS_SOURCE = "initialize"
+WEIGHTS_SOURCE = "file"
 # To use the committed pretrained report weights, change the two lines to:
 #   WEIGHTS_SOURCE = "file"
 #   WEIGHTS_PATH = "from_scratch/weights/derek_optimal_l2_n64_gamma02.npz"
-WEIGHTS_PATH = "from_scratch/weights/derek_optimal_l2_n64_gamma02.npz"
+WEIGHTS_PATH = "from_scratch/weights/derek_rad_n256_gamma03.npz"
 INITIALIZATION_SEED = 7
 
 # Choose one loss. These are minimised by training:
@@ -66,7 +66,7 @@ def CUSTOM_LOSS(predicted_output, target_output, presence):
 
 # Report/model calibration knobs.
 MAX_ITEMS = 10
-NEURONS = 64
+NEURONS = 256
 DT_MS = 10.0
 TAU_MIN_MS = 50.0
 TAU_MAX_MS = 300.0
@@ -83,8 +83,8 @@ DECODE_MS = 500.0
 # Set NOISE_TYPE = "none" and NOISE_FACTOR = 0.0 for deterministic dynamics.
 # "gamma" matches the report. Other equivalent legacy choices are "gaussian",
 # "puregauss", and "csnr"; "none" disables neuron noise.
-NOISE_TYPE = "none"
-NOISE_FACTOR = 0.0
+NOISE_TYPE = "gamma"
+NOISE_FACTOR = 0.3
 SENSORY_NOISE_RAD = 0.0
 RANDOM_SEED = 20250918
 
@@ -97,9 +97,12 @@ STORE_STATES = True  # False saves memory when only readouts/final state are nee
 # Training knobs. Used only when MODE = "train".
 TRAIN_STEPS = 100
 LEARNING_RATE = 1e-4
+LAMBDA_ERR = 1.0       # Weight applied to the prediction/error loss.
+LAMBDA_REG = 1e-5      # Weight applied to mean absolute neural activation.
 TRAIN_SET_SIZE = 1
 TRAIN_NOISE_TYPE = "gamma"
 TRAIN_NOISE_FACTOR = 0.2
+TRAIN_STORE_STATES = True  # Required for the activation regularizer; disable only if LAMBDA_REG = 0.
 
 # Artifact knobs. Set any path to None to skip that artifact.
 RESULTS_DIR = Path("from_scratch/results")
@@ -200,10 +203,18 @@ def _loss_from_result(jnp, result, theta, presence, loss_fn):
     target_output = _target_output(jnp, theta, presence)
     decoded = decode_readouts(result["readouts"], decode_start)
     if LOSS_TYPE == "angular":
-        value = loss_fn(decoded, theta, presence)
+        error_loss = loss_fn(decoded, theta, presence)
     else:
-        value = loss_fn(mean_output, target_output, presence)
-    return value, decoded, mean_output
+        error_loss = loss_fn(mean_output, target_output, presence)
+    if result["states"] is None:
+        activation_penalty = jnp.nan
+        activation_loss = jnp.nan
+        total_loss = jnp.nan
+    else:
+        activation_penalty = jnp.mean(jnp.abs(result["states"]))
+        activation_loss = LAMBDA_REG * activation_penalty
+        total_loss = LAMBDA_ERR * error_loss + activation_loss
+    return total_loss, error_loss, activation_penalty, activation_loss, decoded, mean_output
 
 
 def _run_trial(weights, set_size=SET_SIZE, seed=RANDOM_SEED):
@@ -219,8 +230,21 @@ def _run_trial(weights, set_size=SET_SIZE, seed=RANDOM_SEED):
         store_states=STORE_STATES,
     )
     loss_fn = get_loss(LOSS_TYPE, CUSTOM_LOSS if LOSS_TYPE == "custom" else None)
-    loss, decoded, mean_output = _loss_from_result(jnp, result, theta, presence, loss_fn)
-    return result, {"loss": float(loss), "theta": np.asarray(theta).tolist(), "presence": np.asarray(presence).tolist(), "decoded": np.asarray(decoded).tolist(), "mean_output": np.asarray(mean_output).tolist()}
+    total_loss, error_loss, activation_penalty, activation_loss, decoded, mean_output = _loss_from_result(jnp, result, theta, presence, loss_fn)
+    present_theta = np.asarray(theta)[np.asarray(presence).astype(bool)]
+    present_decoded = np.asarray(decoded)[np.asarray(presence).astype(bool)]
+    return result, {
+        "total_loss": float(total_loss),
+        "error_loss": float(error_loss),
+        "activation_penalty": float(activation_penalty),
+        "activation_loss": float(activation_loss),
+        "theta_all_slots": np.asarray(theta).tolist(),
+        "theta_present_slots": present_theta.tolist(),
+        "presence": np.asarray(presence).tolist(),
+        "decoded_all_slots": np.asarray(decoded).tolist(),
+        "decoded_present_slots": present_decoded.tolist(),
+        "mean_output": np.asarray(mean_output).tolist(),
+    }
 
 
 def _train(weights):
@@ -234,9 +258,9 @@ def _train(weights):
 
     def objective(current_weights, seed):
         key, theta, presence, inputs, initial_state = _trial_data(jax, jnp, TRAIN_SET_SIZE, seed)
-        result = run_trial(current_weights, inputs, initial_state, DT_MS, SATURATION_RATE_HZ, TRAIN_NOISE_TYPE, TRAIN_NOISE_FACTOR, key, False)
-        loss, _, _ = _loss_from_result(jnp, result, theta, presence, loss_fn)
-        return loss
+        result = run_trial(current_weights, inputs, initial_state, DT_MS, SATURATION_RATE_HZ, TRAIN_NOISE_TYPE, TRAIN_NOISE_FACTOR, key, TRAIN_STORE_STATES)
+        total_loss, _, _, _, _, _ = _loss_from_result(jnp, result, theta, presence, loss_fn)
+        return total_loss
 
     objective = jax.jit(objective)
     history = []
@@ -282,10 +306,10 @@ def main():
         values = []
         for set_size in ANALYSIS_SET_SIZES:
             losses = [
-                _run_trial(weights, set_size=set_size, seed=RANDOM_SEED + trial)[1]["loss"]
+                _run_trial(weights, set_size=set_size, seed=RANDOM_SEED + trial)[1]["total_loss"]
                 for trial in range(TRIALS_PER_SET_SIZE)
             ]
-            values.append({"set_size": set_size, "mean_loss": float(np.mean(losses)), "std_loss": float(np.std(losses))})
+            values.append({"set_size": set_size, "mean_total_loss": float(np.mean(losses)), "std_total_loss": float(np.std(losses))})
         report["set_size_results"] = values
     elif MODE == "weight_analysis":
         report["weights"] = {name: {"shape": list(value.shape), "norm": float(jnp.linalg.norm(value))} for name, value in weights.items()}

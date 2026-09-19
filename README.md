@@ -132,6 +132,14 @@ noise. `SENSORY_NOISE_RAD` controls input-angle noise. `TRAIN_NOISE_TYPE` and
 `SAVE_TRIAL`, `SAVE_WEIGHTS`, and `SAVE_RESULTS` control artifacts in
 `from_scratch/results/`.
 
+Trial reports distinguish `theta_all_slots` from `theta_present_slots` because
+the simulator stores one angle for every possible output slot but calculates
+error only where `presence == 1`. They also print `error_loss`,
+`activation_penalty`, `activation_loss`, and `total_loss`. The activation term
+uses the original regularizer, `mean(abs(state))`, weighted by `LAMBDA_REG`.
+Training keeps `TRAIN_STORE_STATES = True` by default because that regularizer
+needs the state trajectory; set it to false only when `LAMBDA_REG = 0`.
+
 ## Selecting pretrained weights
 
 A converted copy of the report's optimal PyTorch checkpoint is included at:
