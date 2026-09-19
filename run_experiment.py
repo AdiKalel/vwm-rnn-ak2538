@@ -101,7 +101,7 @@ LAMBDA_ERR = 1.0       # Weight applied to the prediction/error loss.
 LAMBDA_REG = 1e-5      # Weight applied to mean absolute neural activation.
 TRAIN_SET_SIZE = 1
 TRAIN_NOISE_TYPE = "gamma"
-TRAIN_NOISE_FACTOR = 0.2
+TRAIN_NOISE_FACTOR = 0.3
 TRAIN_STORE_STATES = True  # Required for the activation regularizer; disable only if LAMBDA_REG = 0.
 
 # Artifact knobs. Set any path to None to skip that artifact.
@@ -109,6 +109,25 @@ RESULTS_DIR = Path("from_scratch/results")
 SAVE_WEIGHTS = False
 SAVE_TRIAL = True
 SAVE_RESULTS = True
+
+# =============================================================================
+# ANALYSIS API
+# =============================================================================
+# Use this function from another script or an interactive Python session to
+# sweep one condition while keeping every unspecified trial condition at the
+# defaults above. Example:
+#
+#   noise_levels = [0.02 * i for i in range(6)]
+#   activation_loss = [
+#       run_analysis_trial(noise_factor=noise)["activation_loss"]
+#       for noise in noise_levels
+#   ]
+#   plt.plot(noise_levels, activation_loss)
+#
+# The function name is `run_analysis_trial`. Supported condition overrides are
+# `set_size`, `seed`, `noise_type`, `noise_factor`, `sensory_noise_rad`,
+# `input_strength`, `loss_type`, and `store_states`. Pass `weights=` to reuse
+# already-loaded weights during a large sweep.
 
 # =============================================================================
 # Runner implementation
@@ -161,8 +180,8 @@ def _steps() -> int:
     return int(total / DT_MS)
 
 
-def _inputs(jax, jnp, theta, presence, key):
-    theta_noisy = theta + SENSORY_NOISE_RAD * jax.random.normal(key, theta.shape)
+def _inputs(jax, jnp, theta, presence, key, sensory_noise_rad=SENSORY_NOISE_RAD, input_strength=INPUT_STRENGTH):
+    theta_noisy = theta + sensory_noise_rad * jax.random.normal(key, theta.shape)
     if POSITIVE_INPUT:
         encoded = jnp.stack(
             (
@@ -178,7 +197,7 @@ def _inputs(jax, jnp, theta, presence, key):
     encoded = encoded.reshape(-1)
     times = jnp.arange(_steps()) * DT_MS
     mask = (times >= INIT_MS) & (times < INIT_MS + STIMULUS_MS)
-    return encoded.reshape(1, -1) * mask[:, None] * INPUT_STRENGTH / MAX_ITEMS
+    return encoded.reshape(1, -1) * mask[:, None] * input_strength / MAX_ITEMS
 
 
 def _target_output(jnp, theta, presence):
@@ -186,23 +205,23 @@ def _target_output(jnp, theta, presence):
     return output * jnp.repeat(presence, 2)
 
 
-def _trial_data(jax, jnp, set_size, seed):
+def _trial_data(jax, jnp, set_size, seed, sensory_noise_rad=SENSORY_NOISE_RAD, input_strength=INPUT_STRENGTH):
     key = jax.random.PRNGKey(seed)
     theta = jax.random.uniform(key, (MAX_ITEMS,), minval=-jnp.pi, maxval=jnp.pi)
     presence = jnp.concatenate((jnp.ones(set_size), jnp.zeros(MAX_ITEMS - set_size)))
-    inputs = _inputs(jax, jnp, theta, presence, key)
+    inputs = _inputs(jax, jnp, theta, presence, key, sensory_noise_rad, input_strength)
     initial_state = jnp.zeros(NEURONS)
     return key, theta, presence, inputs, initial_state
 
 
-def _loss_from_result(jnp, result, theta, presence, loss_fn):
+def _loss_from_result(jnp, result, theta, presence, loss_fn, loss_type=LOSS_TYPE, lambda_err=LAMBDA_ERR, lambda_reg=LAMBDA_REG):
     from vwm_scratch.trial import decode_readouts
 
     decode_start = int((INIT_MS + STIMULUS_MS + DELAY_MS) / DT_MS)
     mean_output = result["readouts"][decode_start:].mean(axis=0)
     target_output = _target_output(jnp, theta, presence)
     decoded = decode_readouts(result["readouts"], decode_start)
-    if LOSS_TYPE == "angular":
+    if loss_type == "angular":
         error_loss = loss_fn(decoded, theta, presence)
     else:
         error_loss = loss_fn(mean_output, target_output, presence)
@@ -212,25 +231,39 @@ def _loss_from_result(jnp, result, theta, presence, loss_fn):
         total_loss = jnp.nan
     else:
         activation_penalty = jnp.mean(jnp.abs(result["states"]))
-        activation_loss = LAMBDA_REG * activation_penalty
-        total_loss = LAMBDA_ERR * error_loss + activation_loss
+        activation_loss = lambda_reg * activation_penalty
+        total_loss = lambda_err * error_loss + activation_loss
     return total_loss, error_loss, activation_penalty, activation_loss, decoded, mean_output
 
 
-def _run_trial(weights, set_size=SET_SIZE, seed=RANDOM_SEED):
+def _run_trial(
+    weights,
+    set_size=SET_SIZE,
+    seed=RANDOM_SEED,
+    noise_type=NOISE_TYPE,
+    noise_factor=NOISE_FACTOR,
+    sensory_noise_rad=SENSORY_NOISE_RAD,
+    input_strength=INPUT_STRENGTH,
+    loss_type=LOSS_TYPE,
+    store_states=STORE_STATES,
+):
     jax, jnp, _ = _jax()
     from vwm_scratch.losses import get_loss
     from vwm_scratch.trial import compiled_trial
 
-    key, theta, presence, inputs, initial_state = _trial_data(jax, jnp, set_size, seed)
+    key, theta, presence, inputs, initial_state = _trial_data(
+        jax, jnp, set_size, seed, sensory_noise_rad, input_strength
+    )
     result = compiled_trial(
         weights, inputs, initial_state, DT_MS,
         saturation_rate_hz=SATURATION_RATE_HZ,
-        noise_type=NOISE_TYPE, noise_factor=NOISE_FACTOR, key=key,
-        store_states=STORE_STATES,
+        noise_type=noise_type, noise_factor=noise_factor, key=key,
+        store_states=store_states,
     )
-    loss_fn = get_loss(LOSS_TYPE, CUSTOM_LOSS if LOSS_TYPE == "custom" else None)
-    total_loss, error_loss, activation_penalty, activation_loss, decoded, mean_output = _loss_from_result(jnp, result, theta, presence, loss_fn)
+    loss_fn = get_loss(loss_type, CUSTOM_LOSS if loss_type == "custom" else None)
+    total_loss, error_loss, activation_penalty, activation_loss, decoded, mean_output = _loss_from_result(
+        jnp, result, theta, presence, loss_fn, loss_type, LAMBDA_ERR, LAMBDA_REG
+    )
     present_theta = np.asarray(theta)[np.asarray(presence).astype(bool)]
     present_decoded = np.asarray(decoded)[np.asarray(presence).astype(bool)]
     return result, {
@@ -244,7 +277,59 @@ def _run_trial(weights, set_size=SET_SIZE, seed=RANDOM_SEED):
         "decoded_all_slots": np.asarray(decoded).tolist(),
         "decoded_present_slots": present_decoded.tolist(),
         "mean_output": np.asarray(mean_output).tolist(),
+        "conditions": {
+            "set_size": set_size,
+            "seed": seed,
+            "noise_type": noise_type,
+            "noise_factor": noise_factor,
+            "sensory_noise_rad": sensory_noise_rad,
+            "input_strength": input_strength,
+            "loss_type": loss_type,
+            "store_states": store_states,
+        },
     }
+
+
+def run_analysis_trial(
+    *,
+    weights=None,
+    set_size=SET_SIZE,
+    seed=RANDOM_SEED,
+    noise_type=NOISE_TYPE,
+    noise_factor=NOISE_FACTOR,
+    sensory_noise_rad=SENSORY_NOISE_RAD,
+    input_strength=INPUT_STRENGTH,
+    loss_type=LOSS_TYPE,
+    store_states=STORE_STATES,
+):
+    """Run one analysis trial with optional condition overrides.
+
+    Every argument defaults to the trial knobs above. Override only the
+    condition being analysed, for example:
+
+        result = run_analysis_trial(noise_factor=0.02 * i)
+        activation_loss[i] = result["activation_loss"]
+
+    Set ``store_states=True`` (the default) to calculate activation loss. Set
+    it to false for a lower-memory prediction-only run; activation losses then
+    return NaN because the state trajectory was intentionally not retained.
+    Pass a preloaded ``weights`` pytree to avoid loading/initialising weights
+    inside every iteration of a sweep.
+    """
+    if weights is None:
+        weights = _weights()
+    _, report = _run_trial(
+        weights,
+        set_size=set_size,
+        seed=seed,
+        noise_type=noise_type,
+        noise_factor=noise_factor,
+        sensory_noise_rad=sensory_noise_rad,
+        input_strength=input_strength,
+        loss_type=loss_type,
+        store_states=store_states,
+    )
+    return report
 
 
 def _train(weights):

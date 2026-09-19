@@ -140,6 +140,44 @@ uses the original regularizer, `mean(abs(state))`, weighted by `LAMBDA_REG`.
 Training keeps `TRAIN_STORE_STATES = True` by default because that regularizer
 needs the state trajectory; set it to false only when `LAMBDA_REG = 0`.
 
+## Analysis condition sweeps
+
+Use `run_analysis_trial` from `run_experiment.py` when writing a custom
+analysis loop. It uses the current default trial conditions unless a keyword is
+overridden, and returns a dictionary containing `error_loss`,
+`activation_loss`, `total_loss`, predictions, and the conditions used.
+
+```python
+import matplotlib.pyplot as plt
+import run_experiment as experiment
+
+# Load once, so the loop does not reload weights every time.
+weights = experiment._weights()
+noise_levels = [0.02 * i for i in range(6)]
+activation_loss = []
+error_loss = []
+
+for i, noise in enumerate(noise_levels):
+	result = experiment.run_analysis_trial(
+		weights=weights,
+		noise_factor=noise,
+		seed=experiment.RANDOM_SEED + i,
+	)
+	activation_loss.append(result["activation_loss"])
+	error_loss.append(result["error_loss"])
+
+plt.plot(noise_levels, activation_loss, label="activation loss")
+plt.plot(noise_levels, error_loss, label="error loss")
+plt.xlabel("Noise factor")
+plt.ylabel("Loss")
+plt.legend()
+plt.show()
+```
+
+Supported per-call overrides are `set_size`, `seed`, `noise_type`,
+`noise_factor`, `sensory_noise_rad`, `input_strength`, `loss_type`, and
+`store_states`. For activation loss, leave `store_states=True`.
+
 ## Selecting pretrained weights
 
 A converted copy of the report's optimal PyTorch checkpoint is included at:
