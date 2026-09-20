@@ -271,6 +271,8 @@ def _plot_training(history):
 
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
     # Running this file directly performs one visible 3-item demonstration.
     # In your own code, use `print(run_trial.eloss(...))`: the loss methods
     # return numbers and do not print automatically.
@@ -282,3 +284,32 @@ if __name__ == "__main__":
     print(f"activation_loss = {report['activation_loss']:.6g}")
     print(f"target_present  = {report['theta_present_slots']}")
     print(f"decoded_present = {report['decoded_present_slots']}")
+
+    tloss = np.zeros(10)
+    eloss = np.zeros(10)
+    aloss = np.zeros(10)
+    noise = np.zeros(10)
+
+    for i in range(10):
+        # Keep states because activation_loss is mean(abs(state)); setting
+        # store_states=False is only valid when plotting error/total loss.
+        report = run_trial(weights=weights, set_size=3, seed=i, store_states=True, noise_factor=0.3 * i * 0.1)
+        tloss[i] = report["total_loss"]
+        eloss[i] = report["error_loss"]
+        aloss[i] = report["activation_loss"]
+        noise[i] = report["conditions"]["noise_factor"]
+
+    
+    plt.plot(noise, tloss, label="total loss")
+    plt.plot(noise, eloss, label="error loss")
+    plt.plot(noise, aloss, label="activation loss")
+    plt.xlabel("Noise factor")
+    plt.ylabel("Loss")
+    plt.title("Loss vs noise factor")
+    plt.legend()
+    plt.grid(alpha=0.25)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    plt.savefig(RESULTS_DIR / "loss_vs_noise.png", dpi=160, bbox_inches="tight")
+    plt.show()
+    print(f"saved graph to {RESULTS_DIR / 'loss_vs_noise.png'}")
+    print("check: total_loss - error_loss - activation_loss =", tloss - eloss - aloss)
