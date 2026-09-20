@@ -271,4 +271,14 @@ def _plot_training(history):
 
 
 if __name__ == "__main__":
-    print("Import this file and call train(), save_weights(), or run_trial.tloss/aloss/eloss().")
+    # Running this file directly performs one visible 3-item demonstration.
+    # In your own code, use `print(run_trial.eloss(...))`: the loss methods
+    # return numbers and do not print automatically.
+    print("Running 3-item trial with the current KNOBS...")
+    weights = _weights()
+    report = run_trial(weights=weights, set_size=3, store_states=True)
+    print(f"total_loss      = {report['total_loss']:.6g}")
+    print(f"error_loss      = {report['error_loss']:.6g}")
+    print(f"activation_loss = {report['activation_loss']:.6g}")
+    print(f"target_present  = {report['theta_present_slots']}")
+    print(f"decoded_present = {report['decoded_present_slots']}")
