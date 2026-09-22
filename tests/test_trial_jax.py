@@ -87,3 +87,21 @@ def test_supported_noise_modes_return_finite_trials():
         result = compiled_trial(weights, inputs, initial, 10.0, noise_type=mode, noise_factor=0.2, key=jax.random.PRNGKey(2))
         assert bool(jnp.isfinite(result["states"]).all())
         assert bool(jnp.isfinite(result["readouts"]).all())
+
+
+def test_target_output_accepts_single_and_batched_trials():
+    """The public trial API is one-dimensional; training is batched."""
+    import jax.numpy as jnp
+
+    sys.path.insert(0, str(Path(__file__).parents[1]))
+    from run_experiment import _target_output
+
+    theta = jnp.array([0.0, jnp.pi / 2.0])
+    presence = jnp.array([1.0, 0.0])
+    single = _target_output(jnp, theta, presence)
+    batched = _target_output(jnp, theta[None, :], presence[None, :])
+
+    assert single.shape == (4,)
+    assert batched.shape == (1, 4)
+    assert np.allclose(single, batched[0])
+    assert np.allclose(single, jnp.array([1.0, 0.0, 0.0, 0.0]))

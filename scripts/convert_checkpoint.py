@@ -2,15 +2,15 @@
 
 Example from the repository root:
 
-    python from_scratch/scripts/convert_checkpoint.py \
+    python scripts/convert_checkpoint.py \
         --checkpoint final_report/OptimalModel_check_n64item10PI1gamma0.2l2/models/model_iteration11650.pth \
-        --output from_scratch/weights/optimal_model_iteration11650.npz
+        --output weights/optimal_model_iteration11650.npz
 
 The output contains B, W, F, tau, and dale_sign arrays and can be selected in
-from_scratch/run_experiment.py with:
+run_experiment.py with:
 
     WEIGHTS_SOURCE = "file"
-    WEIGHTS_PATH = "from_scratch/weights/optimal_model_iteration11650.npz"
+    WEIGHTS_PATH = "weights/optimal_model_iteration11650.npz"
 """
 
 from __future__ import annotations

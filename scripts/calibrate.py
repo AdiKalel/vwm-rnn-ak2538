@@ -18,7 +18,7 @@ from vwm_scratch.calibration import derive_calibration, load_config
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
-    parser.add_argument("--output-dir", default="from_scratch/calibration_reports")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "calibration_reports")
     args = parser.parse_args()
 
     config = load_config(args.config)

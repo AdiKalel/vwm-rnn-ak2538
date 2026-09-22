@@ -1,6 +1,20 @@
 # VWM RNN from scratch
 
-This folder is an isolated rebuild of the visual working-memory RNN. The first stage contains only the mathematical specification and calibration utilities. It does not train a model, load checkpoints, or run post-hoc analysis.
+This is a standalone JAX rebuild of the visual working-memory RNN. It includes
+calibration, trial simulation, pretrained-weight loading, and training; it
+does not import the original PyTorch project.
+
+## Install and run
+
+Clone this repository, then run the following from its root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
+pip install -e ".[jax,test]"
+python -m pytest -q
+python run_experiment.py
+```
 
 ## Modes
 
@@ -13,13 +27,13 @@ This folder is an isolated rebuild of the visual working-memory RNN. The first s
 
 ## Run calibration
 
-From the repository root:
+From this repository's root:
 
 ```powershell
-python from_scratch/scripts/calibrate.py --config from_scratch/configs/report_optimal.yaml
+python scripts/calibrate.py --config configs/report_optimal.yaml
 ```
 
-The script writes a JSON record to `from_scratch/calibration_reports/` containing the derived values. The existing project is not imported.
+The script writes a JSON record to `calibration_reports/`. The existing project is not imported.
 
 ## Structure
 
@@ -106,7 +120,7 @@ then import and call the function you need:
 from run_experiment import train, save_weights, run_trial
 
 weights, history = train()
-save_weights(weights, "from_scratch/weights/my_run.npz")
+save_weights(weights, "weights/my_run.npz")
 error = run_trial.eloss(weights=weights, set_size=3)
 ```
 
@@ -116,9 +130,20 @@ report, while `run_trial.tloss()`, `run_trial.aloss()`, and `run_trial.eloss()`
 return total, activation, and prediction/error loss respectively.
 
 `WEIGHTS_SOURCE` is either `initialize` for reproducible fresh weights or
-`file` for a `.npz` produced by this runner. `LOSS_TYPE` accepts `angular`,
-`euclidean`, `rooted_euclidean`, `exponential`, or `custom`. For a custom loss,
-set `LOSS_TYPE = "custom"` and edit `CUSTOM_LOSS` while preserving:
+`file` for a `.npz` produced by this runner. Training `LOSS_TYPE` matches
+Derek's names exactly: `l2`, `sqrtl2`, `norml2`, `exp`, or `rad` (the current
+project default is `norml2`). `tau` and `dale_sign` are fixed buffers, while
+Adam updates only `B`, `W`, and `F`; after each update positive input weights
+and raw Dale-constrained recurrent weights are projected non-negative.
+
+Training uses one compiled batched JAX step per curriculum noise level. It
+generates balanced groups for all values in `TRAIN_ITEM_NUM`, applies the same
+log-spaced noise curriculum (1e-3 to `TRAIN_NOISE_FACTOR`), ReduceLROnPlateau
+settings, early-stop stage transitions, and log-period checkpoints as Derek's
+trainer. `run_trial` evaluation losses remain `angular`, `euclidean`,
+`rooted_euclidean`, `exponential`, or `custom`. Pass `loss_type="custom"`
+to `run_trial` for a custom evaluation loss and edit `CUSTOM_LOSS` while
+preserving:
 
 ```python
 CUSTOM_LOSS(predicted_output, target_output, presence) -> scalar_jax_value
@@ -183,7 +208,7 @@ To run the from-scratch code with it, change these two knobs in
 
 ```python
 WEIGHTS_SOURCE = "file"
-WEIGHTS_PATH = "from_scratch/weights/optimal_model_iteration11650.npz"
+WEIGHTS_PATH = "weights/optimal_model_iteration11650.npz"
 ```
 
 The file contains `B`, `W`, `F`, `tau`, and `dale_sign`. Provenance and the
@@ -191,7 +216,7 @@ source checkpoint hash are recorded in the adjacent JSON metadata file. To
 convert another original `.pth` checkpoint, run:
 
 ```powershell
-python from_scratch/scripts/convert_checkpoint.py `
+python scripts/convert_checkpoint.py `
 	--checkpoint path/to/model_iterationXXXX.pth `
-	--output from_scratch/weights/my_weights.npz
+	--output weights/my_weights.npz
 ```
