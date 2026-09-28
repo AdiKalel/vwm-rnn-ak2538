@@ -1,0 +1,70 @@
+{
+  "status": "PASS",
+  "device": "cpu",
+  "seed": 20250918,
+  "trials_per_set_size": 64,
+  "config": "C:\\Users\\arkal\\vwm_rnn\\final_report\\OptimalModel_check_n64item10PI1gamma0.2l2\\config.yaml",
+  "checkpoint": "C:\\Users\\arkal\\vwm_rnn\\final_report\\OptimalModel_check_n64item10PI1gamma0.2l2\\models\\model_iteration11650.pth",
+  "checkpoint_sha256": "edd3845869a152512f89a1db21773c1682451dfa7dd7e2e96e68e960467c2a24",
+  "conditions": {
+    "ILC_noise": 0.0,
+    "spike_noise_type": "gamma",
+    "spike_noise_factor": 0.2,
+    "input_strength": 120,
+    "T_init": 20,
+    "T_stimi": 500,
+    "T_delay": 1000,
+    "T_decode": 500,
+    "dt": 10
+  },
+  "set_sizes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "mean_error_rad": [
+    0.15728844702243805,
+    0.26674824953079224,
+    0.38916510343551636,
+    0.44588783383369446,
+    0.5827943086624146,
+    0.5938010215759277,
+    0.6634489893913269,
+    0.651688814163208,
+    0.7487156987190247,
+    0.8330466151237488
+  ],
+  "std_error_rad": [
+    0.12282558530569077,
+    0.12411229312419891,
+    0.18199366331100464,
+    0.19504283368587494,
+    0.18971070647239685,
+    0.19970819354057312,
+    0.19169607758522034,
+    0.1827532798051834,
+    0.19391436874866486,
+    0.21824020147323608
+  ],
+  "mean_error_degrees": [
+    9.01196418055274,
+    15.283548890616936,
+    22.29751796062722,
+    25.547491014901247,
+    33.39165421060095,
+    34.022292406857396,
+    38.01282701434276,
+    37.33901860743725,
+    42.89824959178861,
+    47.73005518424986
+  ],
+  "random_guess_baseline_rad": 1.5707963267948966,
+  "plot": "C:\\Users\\arkal\\vwm_rnn\\verification_set_size.png"
+}

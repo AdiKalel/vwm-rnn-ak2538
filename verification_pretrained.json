@@ -1,0 +1,25 @@
+{
+  "status": "PASS",
+  "device": "cpu",
+  "seed": 20250917,
+  "trials": 32,
+  "set_size": 1,
+  "spike_noise_factor": 0.0,
+  "config": "C:\\Users\\arkal\\vwm_rnn\\final_report\\check_l2_n64item10PI1gamma0.2l2\\config.yaml",
+  "checkpoint": "C:\\Users\\arkal\\vwm_rnn\\final_report\\check_l2_n64item10PI1gamma0.2l2\\models\\model_iteration8450.pth",
+  "checkpoint_sha256": "ca32bf2fa20f1963fbf3d75ca588619bbc6df1b9a0b0a89e81cbb72296494f7a",
+  "model_parameters": 7296,
+  "input_shape": [
+    32,
+    202,
+    30
+  ],
+  "activity_shape": [
+    32,
+    202,
+    64
+  ],
+  "mean_angular_error_rad": 0.28510478138923645,
+  "finite_outputs": true,
+  "plot": "C:\\Users\\arkal\\vwm_rnn\\verification_pretrained.png"
+}
