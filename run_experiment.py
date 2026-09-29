@@ -7,7 +7,7 @@ Use from the repository root:
     from run_experiment import train, save_weights, run_trial
 
     weights, history = train()
-    save_weights(weights, "weights/my_run.npz")
+    save_weights(weights, "from_scratch/weights/my_run.npz")
     error = run_trial.eloss(weights=weights, set_size=3)
 
 Edit the KNOBS block below. There are no mode switches: call the function you
@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 # Use "file" for trained weights or "initialize" for new untrained weights.
 WEIGHTS_SOURCE = "file"
-WEIGHTS_PATH = ROOT / "weights" / "derek_rad_n256_gamma03.npz"
+WEIGHTS_PATH = "from_scratch/weights/derek_rad_n256_gamma03.npz"
 INITIALIZATION_SEED = 7
 
 # Architecture and timing.
@@ -68,8 +68,8 @@ TRAIN_LR_FACTOR = 0.5
 TRAIN_NUM_STAGES = 5
 TRAIN_MIN_NOISE_FACTOR = 1e-3
 
-RESULTS_DIR = ROOT / "results"
-WEIGHTS_DIR = ROOT / "weights"
+RESULTS_DIR = Path("from_scratch/results")
+WEIGHTS_DIR = Path("from_scratch/weights")
 TRAIN_SAVE_DIR = RESULTS_DIR / "training"
 
 
@@ -493,3 +493,5 @@ if __name__ == "__main__":
     plt.show()
     print(f"saved graph to {RESULTS_DIR / 'loss_vs_noise.png'}")
     print("check: total_loss - error_loss - activation_loss =", tloss - eloss - aloss)
+
+    train(steps=100, show_plot=True, num_trials=100, item_numbers=(1,), logging_period=10)
