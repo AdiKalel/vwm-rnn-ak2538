@@ -1,0 +1,97 @@
+{
+  "label": "Derek radian loss: N256, gamma 0.3, no sensory noise",
+  "source_checkpoint": "C:\\Users\\arkal\\vwm_rnn\\final_report\\spike_noise_factor-0.30000000_n256item10PI1gamma0.3rad\\models\\model_iteration2300.pth",
+  "source_sha256": "848cb7bae0164bfa9f59f90f23a347d2e098f269665286cced40dfa4735ee5e5",
+  "output": "C:\\Users\\arkal\\vwm_rnn\\from_scratch\\weights\\derek_rad_n256_gamma03.npz",
+  "arrays": {
+    "B": {
+      "shape": [
+        256,
+        30
+      ],
+      "dtype": "float32"
+    },
+    "W": {
+      "shape": [
+        256,
+        256
+      ],
+      "dtype": "float32"
+    },
+    "F": {
+      "shape": [
+        20,
+        256
+      ],
+      "dtype": "float32"
+    },
+    "tau": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    },
+    "dale_sign": {
+      "shape": [
+        256
+      ],
+      "dtype": "float32"
+    }
+  },
+  "source_config": "C:\\Users\\arkal\\vwm_rnn\\final_report\\spike_noise_factor-0.30000000_n256item10PI1gamma0.3rad\\config.yaml",
+  "conditions": {
+    "model": {
+      "ILC_noise": 0.0,
+      "T_decode": 500,
+      "T_delay": 1000,
+      "T_init": 20,
+      "T_stimi": 500,
+      "dales_law": true,
+      "dt": 10,
+      "input_strength": 120,
+      "item_num": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "max_item_num": 10,
+      "num_neurons": 256,
+      "positive_input": true,
+      "saturation_firing_rate": 60,
+      "spike_noise_factor": 0.3,
+      "spike_noise_type": "gamma",
+      "tau_max": 300,
+      "tau_min": 50
+    },
+    "training": {
+      "adaptive_lr_patience": 400,
+      "early_stop_patience": 600,
+      "error_def": "rad",
+      "eta": 0.0001,
+      "lambda_err": 1.0,
+      "lambda_reg": 1e-05,
+      "load_history": true,
+      "logging_period": 50,
+      "num_iterations": 50000,
+      "num_trials": 512,
+      "train_rnn": false,
+      "use_scripted_model": false
+    },
+    "logging": {
+      "rnn_name": "exp_Neuron256Input120RadLoss/spike_noise_factor-0.30000000",
+      "cuda_device": 0,
+      "plot_weights_bool": false,
+      "error_dist_bool": false,
+      "fit_mixture_bool": false,
+      "snr_analy_bool": false,
+      "mixed_selec_bool": false
+    }
+  }
+}

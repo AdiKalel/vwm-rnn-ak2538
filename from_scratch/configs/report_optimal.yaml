@@ -1,0 +1,26 @@
+name: report_optimal
+
+model:
+  max_items: 10
+  neurons: 64
+  dt_ms: 10.0
+  tau_min_ms: 50.0
+  tau_max_ms: 300.0
+  positive_input: true
+  dale_law: true
+  saturation_rate_hz: 60.0
+
+experiment:
+  input_strength: 120.0
+  sensory_noise_rad: 0.0
+  spike_noise_type: gamma
+  spike_noise_factor: 0.2
+  init_ms: 20.0
+  stimulus_ms: 500.0
+  delay_ms: 1000.0
+  decode_ms: 500.0
+
+calibration:
+  orientation_min_rad: -3.141592653589793
+  orientation_max_rad: 3.141592653589793
+  random_seed: 20250918

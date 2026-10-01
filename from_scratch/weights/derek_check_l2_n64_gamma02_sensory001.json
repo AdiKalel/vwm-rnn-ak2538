@@ -1,0 +1,97 @@
+{
+  "label": "Derek check L2: N64, gamma 0.2, sensory noise 0.01",
+  "source_checkpoint": "C:\\Users\\arkal\\vwm_rnn\\final_report\\check_l2_n64item10PI1gamma0.2l2\\models\\model_iteration8450.pth",
+  "source_sha256": "ca32bf2fa20f1963fbf3d75ca588619bbc6df1b9a0b0a89e81cbb72296494f7a",
+  "output": "C:\\Users\\arkal\\vwm_rnn\\from_scratch\\weights\\derek_check_l2_n64_gamma02_sensory001.npz",
+  "arrays": {
+    "B": {
+      "shape": [
+        64,
+        30
+      ],
+      "dtype": "float32"
+    },
+    "W": {
+      "shape": [
+        64,
+        64
+      ],
+      "dtype": "float32"
+    },
+    "F": {
+      "shape": [
+        20,
+        64
+      ],
+      "dtype": "float32"
+    },
+    "tau": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    },
+    "dale_sign": {
+      "shape": [
+        64
+      ],
+      "dtype": "float32"
+    }
+  },
+  "source_config": "C:\\Users\\arkal\\vwm_rnn\\final_report\\check_l2_n64item10PI1gamma0.2l2\\config.yaml",
+  "conditions": {
+    "model": {
+      "max_item_num": 10,
+      "item_num": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "num_neurons": 64,
+      "dt": 10,
+      "tau_max": 300,
+      "tau_min": 50,
+      "ILC_noise": 0.01,
+      "spike_noise_factor": 0.2,
+      "spike_noise_type": "gamma",
+      "positive_input": true,
+      "input_strength": 100,
+      "saturation_firing_rate": 60,
+      "dales_law": true,
+      "T_init": 20,
+      "T_stimi": 500,
+      "T_delay": 1000,
+      "T_decode": 500
+    },
+    "training": {
+      "train_rnn": false,
+      "load_history": true,
+      "use_scripted_model": false,
+      "num_iterations": 50000,
+      "error_def": "l2",
+      "eta": 0.0001,
+      "lambda_reg": 1e-05,
+      "lambda_err": 1.0,
+      "num_trials": 512,
+      "logging_period": 50,
+      "early_stop_patience": 600,
+      "adaptive_lr_patience": 400
+    },
+    "logging": {
+      "rnn_name": "check_l2",
+      "cuda_device": 1,
+      "plot_weights_bool": false,
+      "error_dist_bool": false,
+      "fit_mixture_bool": false,
+      "snr_analy_bool": false,
+      "mixed_selec_bool": false
+    }
+  }
+}

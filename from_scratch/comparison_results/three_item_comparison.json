@@ -1,0 +1,25 @@
+{
+  "backend": "jax",
+  "checkpoint": "C:\\Users\\arkal\\vwm_rnn\\final_report\\OptimalModel_check_n64item10PI1gamma0.2l2\\models\\model_iteration11650.pth",
+  "conditions": {
+    "items": 3,
+    "dt_ms": 10.0,
+    "noise_type": "none",
+    "noise_factor": 0.0,
+    "input_strength": 120.0
+  },
+  "state_shape": [
+    202,
+    64
+  ],
+  "readout_shape": [
+    202,
+    20
+  ],
+  "max_state_abs_difference": 3.4332275390625e-05,
+  "mean_state_abs_difference": 1.7647130334808026e-06,
+  "max_readout_abs_difference": 3.814697265625e-05,
+  "mean_readout_abs_difference": 3.383758894415223e-06,
+  "equivalent_within_1e-4": true,
+  "plot": "C:\\Users\\arkal\\vwm_rnn\\from_scratch\\comparison_results\\three_item_activations.png"
+}
