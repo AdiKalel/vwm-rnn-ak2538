@@ -138,6 +138,43 @@ file, `training_history.json`, overall progress plots, and per-set-size error
 history beneath `from_scratch/results/training/`. It updates B/W/F; time
 constants and Dale signs remain fixed like buffers in Derek's PyTorch model.
 
+`steps` is an absolute iteration limit for the whole history. With
+`stage=None`, the curriculum advances automatically when early stopping fires;
+the run can end before 40,000 if all stages converge. For manual control, train
+to a chosen iteration, inspect verification, then promote the checkpoint one
+stage. For example, this runs stage 1 up to iteration 1,000, then stage 2 up to
+iteration 2,000:
+
+```python
+weights, history = train(steps=1000, stage=1, verification_period=100)
+# Inspect history["verification_errors"] before proceeding.
+weights, history = train(
+    steps=2000,
+    stage=2,
+    resume_from="from_scratch/results/training/latest_checkpoint.pkl",
+    verification_period=100,
+)
+```
+
+`stage=2` with the stage-1 checkpoint promotes exactly one curriculum stage
+while carrying Adam's optimizer state. To intentionally restart Adam or insert
+an arbitrary partially trained `.npz` into stage 3, pass that weight pytree as
+`weights=...` and omit `resume_from`; optimizer moments then start fresh.
+
+You can also start a later stage from a supplied weights pytree with no
+`resume_from`; that starts fresh Adam moments. Resuming the checkpoint preserves
+Adam state. `checkpoint_period` controls full resumable checkpoint frequency;
+`logging_period` controls metric/history writes; `verification_period` controls
+the separate fixed validation pass (`0` disables it).
+
+The output prints the actual JAX device. It should say `GpuDevice(...)` when a
+CUDA-enabled JAX build is active. `CpuDevice(...)` means training is on CPU,
+even if the node has an NVIDIA card; CUDA JAX must be installed in the active
+SSH virtual environment and tested with `python -c 'import jax; print(jax.devices())'`.
+At the observed 30 minutes per 100 steps, 40,000 steps would take about 200
+hours if the rate stayed constant. Benchmark on GPU before starting the full
+run. Multi-GPU sharding is not implemented yet; a single GPU is supported.
+
 Resume an interrupted run without resetting Adam state:
 
 ```python

@@ -64,6 +64,8 @@ TRAIN_NOISE_TYPE, TRAIN_NOISE_FACTOR = "gamma", 0.3
 TRAIN_NUM_TRIALS = 300
 TRAIN_ITEM_NUM = tuple(range(1, MAX_ITEMS + 1))
 TRAIN_LOGGING_PERIOD = 10
+TRAIN_CHECKPOINT_PERIOD = 100
+TRAIN_VERIFY_PERIOD = 100
 TRAIN_EARLY_STOP_PATIENCE = 150
 TRAIN_ADAPTIVE_LR_PATIENCE = 100
 TRAIN_LR_FACTOR = 0.5
@@ -92,19 +94,30 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
           noise_type=TRAIN_NOISE_TYPE, noise_factor=TRAIN_NOISE_FACTOR,
         show_plot=True, num_trials=TRAIN_NUM_TRIALS,
         item_numbers=TRAIN_ITEM_NUM, logging_period=TRAIN_LOGGING_PERIOD,
+        checkpoint_period=TRAIN_CHECKPOINT_PERIOD,
+        verification_period=TRAIN_VERIFY_PERIOD,
         early_stop_patience=TRAIN_EARLY_STOP_PATIENCE,
         adaptive_lr_patience=TRAIN_ADAPTIVE_LR_PATIENCE,
-        num_stages=TRAIN_NUM_STAGES, resume_from=None):
+        num_stages=TRAIN_NUM_STAGES, stage=None, resume_from=None):
     """Train with Derek's mixed-set-size curriculum and checkpoint behavior.
 
     The returned history contains overall and per-set-size evaluation errors,
     standard deviations, activation, learning rate, stage/noise, and best-step
     metadata. Checkpoints and ``training_history.json`` are written under
     ``TRAIN_SAVE_DIR`` every ``logging_period`` iterations.
+
+    Leave ``stage=None`` to use automatic stage transitions. Set ``stage=1``
+    through ``stage=num_stages`` to train only that noise stage, then pass the
+    returned weights into the next call. ``steps`` is the total target
+    iteration for automatic/resumed training and the step budget for a fresh
+    manual stage. ``verification_period`` controls a separate fixed validation
+    batch; ``checkpoint_period`` controls full resumable checkpoint writes.
     """
     jax, jnp, optax = _jax()
     from vwm_scratch.losses import training_loss
     from vwm_scratch.trial import run_trial as jax_run_trial
+
+    print(f"JAX training devices: {jax.devices()}")
 
     current = _weights() if weights is None else weights
     fixed_parameters = {name: current[name] for name in ("tau", "dale_sign")}
@@ -134,7 +147,9 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         "max_items": MAX_ITEMS,
         "neurons": NEURONS,
     }
-    current_stage = 0
+    if stage is not None and not 1 <= stage <= len(stage_levels):
+        raise ValueError(f"stage must be between 1 and {len(stage_levels)}")
+    current_stage = stage - 1 if stage is not None else 0
     current_step = 0
     current_lr = learning_rate
     stage_best_value = np.inf
@@ -142,6 +157,10 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     steps_without_improvement = 0
     plateau_steps = 0
     history = _new_history(item_numbers, stage_levels)
+    history["current_stage"] = current_stage
+    history["stage_only"] = stage is not None
+    history["verification_steps"] = []
+    history["verification_errors"] = []
     best_weights = current
     if resume_from is not None:
         with _resolve_local_path(resume_from).open("rb") as file_handle:
@@ -156,12 +175,29 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         optimizer_state = jax.tree.map(jnp.asarray, checkpoint["optimizer_state"])
         history = checkpoint["history"]
         current_step = checkpoint["next_step"]
-        current_stage = checkpoint["current_stage"]
-        current_lr = checkpoint["current_lr"]
-        stage_best_value = checkpoint["stage_best_value"]
+        checkpoint_stage = checkpoint["current_stage"]
+        if stage is None or stage == checkpoint_stage + 1:
+            current_stage = checkpoint_stage
+            current_lr = checkpoint["current_lr"]
+            stage_best_value = checkpoint["stage_best_value"]
+            steps_without_improvement = checkpoint["steps_without_improvement"]
+            plateau_steps = checkpoint["plateau_steps"]
+        elif stage == checkpoint_stage + 2:
+            current_stage = checkpoint_stage + 1
+            current_lr = learning_rate
+            stage_best_value = np.inf
+            steps_without_improvement = 0
+            plateau_steps = 0
+            history["current_stage"] = current_stage
+            history["stage_completed"] = False
+            history["stage_budget_exhausted"] = False
+            history["stage_switch_iters"].append(current_step)
+        else:
+            raise ValueError(
+                f"Checkpoint is at stage {checkpoint_stage + 1}; resume at that stage "
+                f"or promote exactly one stage to {checkpoint_stage + 2}."
+            )
         global_best_value = checkpoint["global_best_value"]
-        steps_without_improvement = checkpoint["steps_without_improvement"]
-        plateau_steps = checkpoint["plateau_steps"]
         best_weights = {name: jnp.asarray(value) for name, value in checkpoint["best_weights"].items()}
 
     training_error_type = {
@@ -211,6 +247,13 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         return objective({**parameters, **fixed_parameters}, batch, keys, stage_noise)
 
     compiled_objective = jax.jit(trainable_objective, static_argnames=("stage_noise",))
+    verification_batch = _training_batch(
+        jax, jnp, num_trials, item_numbers, RANDOM_SEED + 900000,
+        input_strength=INPUT_STRENGTH,
+    )
+    verification_keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 900001), num_trials)
+    stage_call_completed = False
+    starting_history_count = len(history["iterations"])
     for step in range(current_step, steps):
         if current_stage >= len(stage_levels):
             break
@@ -262,6 +305,10 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
             history["lr_reductions"].append(step)
             plateau_steps = 0
         if steps_without_improvement >= early_stop_patience:
+            if stage is not None:
+                history["stage_completed"] = True
+                stage_call_completed = True
+                break
             if current_stage + 1 < len(stage_levels):
                 current_stage += 1
                 stage_best_value = np.inf
@@ -271,10 +318,20 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
             else:
                 history["training_completed"] = True
                 break
+        if verification_period > 0 and ((step + 1) % verification_period == 0 or step == current_step):
+            _, verification_aux = compiled_objective(
+                trainable, verification_batch, verification_keys, 0.0
+            )
+            validation_error = float(verification_aux[2])
+            history["verification_steps"].append(step + 1)
+            history["verification_errors"].append(validation_error)
+            print()
+            print(f"  verification at step {step + 1}: angular_error={validation_error:.6g}")
         if step % logging_period == 0 or step == steps - 1:
             TRAIN_SAVE_DIR.mkdir(parents=True, exist_ok=True)
             np.savez(TRAIN_SAVE_DIR / f"weights_iteration{step}.npz", **{name: np.asarray(x) for name, x in current.items()})
             (TRAIN_SAVE_DIR / "training_history.json").write_text(json.dumps(history, indent=2))
+        if checkpoint_period > 0 and ((step + 1) % checkpoint_period == 0 or step == steps - 1):
             _save_training_checkpoint(
                 TRAIN_SAVE_DIR / "latest_checkpoint.pkl", current, optimizer_state,
                 history, step + 1, current_stage, current_lr, stage_best_value,
@@ -285,9 +342,18 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     print()
     if show_plot:
         _plot_training(history)
-    history["training_completed"] = history.get("training_completed", False) or bool(
+    history["stage_completed"] = history.get("stage_completed", False) or stage_call_completed
+    history["steps_this_call"] = len(history["iterations"]) - starting_history_count
+    history["requested_total_steps"] = steps
+    history["stage_budget_exhausted"] = bool(
+        stage is not None and not history["stage_completed"] and history["steps_this_call"] >= steps
+    )
+    history["step_budget_exhausted"] = bool(
         history["iterations"] and history["iterations"][-1] + 1 >= steps
     )
+    # Completion means the final curriculum stage converged, not merely that
+    # this invocation used its requested step budget.
+    history["training_completed"] = bool(history.get("training_completed", False))
     history["best_weights_path"] = str(TRAIN_SAVE_DIR / "weights_best.npz")
     TRAIN_SAVE_DIR.mkdir(parents=True, exist_ok=True)
     np.savez(TRAIN_SAVE_DIR / "weights_best.npz", **{name: np.asarray(x) for name, x in best_weights.items()})
