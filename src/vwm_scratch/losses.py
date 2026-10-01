@@ -92,11 +92,11 @@ def training_loss(readouts, target_output, target_theta, presence, error_type):
         raise ValueError("error_type must be l2, sqrtl2, norml2, rad, or exp")
     per_trial = jnp.sum(per_item * presence, axis=-1) / jnp.sum(presence, axis=-1)
     train_mean = jnp.mean(per_trial)
-    train_var = jnp.var(per_trial)
+    train_var = jnp.var(per_trial, ddof=1)
     decoded = jnp.arctan2(predicted.mean(axis=0)[..., 1], predicted.mean(axis=0)[..., 0])
     eval_error = circular_difference(decoded, target_theta)
     eval_per_trial = jnp.sum(jnp.abs(eval_error) * presence, axis=-1) / jnp.sum(presence, axis=-1)
-    return train_mean, train_var, jnp.mean(eval_per_trial), jnp.var(eval_per_trial)
+    return train_mean, train_var, jnp.mean(eval_per_trial), jnp.var(eval_per_trial, ddof=1)
 
 
 def get_loss(name: str, custom_loss: Callable[..., Any] | None = None):

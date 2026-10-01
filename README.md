@@ -129,6 +129,26 @@ saves an explicitly supplied weight pytree. `run_trial()` returns the full
 report, while `run_trial.tloss()`, `run_trial.aloss()`, and `run_trial.eloss()`
 return total, activation, and prediction/error loss respectively.
 
+Training defaults now follow Derek's active `config.yaml`: 40,000 optimizer
+steps, 300 trials split across set sizes 1-10, Adam at `1e-4`, a five-stage
+log-spaced spike-noise curriculum ending at `TRAIN_NOISE_FACTOR`, logging every
+10 steps, plateau LR reduction by 0.5, and patience 100/150 for LR reduction /
+stage early stopping. `train()` writes iteration checkpoints, a best-weight
+file, `training_history.json`, overall progress plots, and per-set-size error
+history beneath `from_scratch/results/training/`. It updates B/W/F; time
+constants and Dale signs remain fixed like buffers in Derek's PyTorch model.
+
+Resume an interrupted run without resetting Adam state:
+
+```python
+weights, history = train(
+	resume_from="from_scratch/results/training/latest_checkpoint.pkl"
+)
+```
+
+The checkpoint rejects a resume if architecture, loss, batch size, or noise
+curriculum settings differ from those used to create it.
+
 `WEIGHTS_SOURCE` is either `initialize` for reproducible fresh weights or
 `file` for a `.npz` produced by this runner. Training `LOSS_TYPE` matches
 Derek's names exactly: `l2`, `sqrtl2`, `norml2`, `exp`, or `rad` (the current

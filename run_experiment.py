@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sys
 import json
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -54,7 +55,8 @@ RANDOM_SEED = 20250918
 
 # Training defaults.
 LOSS_TYPE = "angular"  # angular, euclidean, rooted_euclidean, exponential, custom
-TRAIN_STEPS = 100
+# Derek's active project config uses 40,000 iterations; lower this for a smoke run.
+TRAIN_STEPS = 40000
 LEARNING_RATE = 1e-4
 LAMBDA_ERR, LAMBDA_REG = 1.0, 1e-5
 TRAIN_SET_SIZE = 1
@@ -92,7 +94,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         item_numbers=TRAIN_ITEM_NUM, logging_period=TRAIN_LOGGING_PERIOD,
         early_stop_patience=TRAIN_EARLY_STOP_PATIENCE,
         adaptive_lr_patience=TRAIN_ADAPTIVE_LR_PATIENCE,
-        num_stages=TRAIN_NUM_STAGES, resume_history=None):
+        num_stages=TRAIN_NUM_STAGES, resume_from=None):
     """Train with Derek's mixed-set-size curriculum and checkpoint behavior.
 
     The returned history contains overall and per-set-size evaluation errors,
@@ -105,10 +107,12 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     from vwm_scratch.trial import run_trial as jax_run_trial
 
     current = _weights() if weights is None else weights
+    fixed_parameters = {name: current[name] for name in ("tau", "dale_sign")}
+    trainable = {name: current[name] for name in ("B", "W", "F")}
     if loss_type == "custom":
         raise ValueError("Custom loss training requires adding it to training_loss in losses.py")
-    optimizer = optax.adam(learning_rate)
-    optimizer_state = optimizer.init(current)
+    optimizer = optax.scale_by_adam()
+    optimizer_state = optimizer.init(trainable)
 
     if noise_factor <= 0.0:
         stage_levels = [0.0]
@@ -116,16 +120,49 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         stage_levels = [noise_factor]
     else:
         stage_levels = np.geomspace(TRAIN_MIN_NOISE_FACTOR, noise_factor, num_stages).tolist()
+    train_signature = {
+        "loss_type": loss_type,
+        "learning_rate": learning_rate,
+        "num_trials": num_trials,
+        "item_numbers": list(item_numbers),
+        "noise_type": noise_type,
+        "stage_noise_levels": list(stage_levels),
+        "lambda_err": LAMBDA_ERR,
+        "lambda_reg": LAMBDA_REG,
+        "dt_ms": DT_MS,
+        "input_strength": INPUT_STRENGTH,
+        "max_items": MAX_ITEMS,
+        "neurons": NEURONS,
+    }
     current_stage = 0
     current_step = 0
     current_lr = learning_rate
-    history = resume_history or _new_history(item_numbers, stage_levels)
-    if resume_history:
-        current_step = history["iterations"][-1] if history["iterations"] else 0
-        current_stage = history.get("current_stage", 0)
-        current_lr = history.get("lr", [learning_rate])[-1]
-        optimizer = optax.adam(current_lr)
-        optimizer_state = optimizer.init(current)
+    stage_best_value = np.inf
+    global_best_value = np.inf
+    steps_without_improvement = 0
+    plateau_steps = 0
+    history = _new_history(item_numbers, stage_levels)
+    best_weights = current
+    if resume_from is not None:
+        with Path(resume_from).open("rb") as file_handle:
+            checkpoint = pickle.load(file_handle)
+        if checkpoint["stage_noise_levels"] != stage_levels:
+            raise ValueError("Checkpoint noise curriculum differs from current noise_factor or num_stages")
+        if checkpoint.get("train_signature") != train_signature:
+            raise ValueError("Checkpoint training settings differ; resume with the original loss, batch, noise, and model settings")
+        current = {name: jnp.asarray(value) for name, value in checkpoint["weights"].items()}
+        fixed_parameters = {name: current[name] for name in ("tau", "dale_sign")}
+        trainable = {name: current[name] for name in ("B", "W", "F")}
+        optimizer_state = jax.tree.map(jnp.asarray, checkpoint["optimizer_state"])
+        history = checkpoint["history"]
+        current_step = checkpoint["next_step"]
+        current_stage = checkpoint["current_stage"]
+        current_lr = checkpoint["current_lr"]
+        stage_best_value = checkpoint["stage_best_value"]
+        global_best_value = checkpoint["global_best_value"]
+        steps_without_improvement = checkpoint["steps_without_improvement"]
+        plateau_steps = checkpoint["plateau_steps"]
+        best_weights = {name: jnp.asarray(value) for name, value in checkpoint["best_weights"].items()}
 
     training_error_type = {
         "angular": "rad",
@@ -149,24 +186,52 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         )
         activation = jnp.mean(jnp.abs(states))
         total = LAMBDA_ERR * train_mean + LAMBDA_REG * activation
-        return total, (train_mean, train_var, eval_mean, eval_var, activation)
+        decoded = jnp.arctan2(readouts.mean(axis=0).reshape(num_trials, MAX_ITEMS, 2)[..., 1],
+                              readouts.mean(axis=0).reshape(num_trials, MAX_ITEMS, 2)[..., 0])
+        angular_delta = (batch["theta"] - decoded + jnp.pi) % (2 * jnp.pi) - jnp.pi
+        trial_errors = jnp.sum(jnp.abs(angular_delta) * batch["presence"], axis=1) / jnp.sum(batch["presence"], axis=1)
+        trial_activation = jnp.mean(jnp.abs(results["states"]), axis=(1, 2))
+        group_errors = jnp.stack([
+            jnp.sum(trial_errors * (batch["set_sizes"] == item)) / jnp.maximum(jnp.sum(batch["set_sizes"] == item), 1)
+            for item in item_numbers
+        ])
+        group_vars = jnp.stack([
+            jnp.sum((trial_errors - group_errors[i]) ** 2 * (batch["set_sizes"] == item)) /
+            jnp.maximum(jnp.sum(batch["set_sizes"] == item) - 1, 1)
+            for i, item in enumerate(item_numbers)
+        ])
+        group_activations = jnp.stack([
+            jnp.sum(trial_activation * (batch["set_sizes"] == item)) /
+            jnp.maximum(jnp.sum(batch["set_sizes"] == item), 1)
+            for item in item_numbers
+        ])
+        return total, (train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations)
 
-    best_weights = current
-    best_value = np.inf
-    steps_without_improvement = 0
-    plateau_steps = 0
+    def trainable_objective(parameters, batch, keys, stage_noise):
+        return objective({**parameters, **fixed_parameters}, batch, keys, stage_noise)
+
+    compiled_objective = jax.jit(trainable_objective, static_argnames=("stage_noise",))
     for step in range(current_step, steps):
         if current_stage >= len(stage_levels):
             break
         batch = _training_batch(jax, jnp, num_trials, item_numbers, RANDOM_SEED + step, input_strength=INPUT_STRENGTH)
         keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 100000 + step), num_trials)
-        compiled_objective = jax.jit(objective, static_argnames=("stage_noise",))
-        value_aux, gradients = jax.value_and_grad(compiled_objective, has_aux=True)(current, batch, keys, stage_levels[current_stage])
+        value_aux, gradients = jax.value_and_grad(compiled_objective, has_aux=True)(trainable, batch, keys, stage_levels[current_stage])
         value, aux = value_aux
-        updates, optimizer_state = optimizer.update(gradients, optimizer_state, current)
-        current = optax.apply_updates(current, updates)
+        updates, optimizer_state = optimizer.update(gradients, optimizer_state, trainable)
+        updates = jax.tree.map(lambda update: -current_lr * update, updates)
+        trainable = optax.apply_updates(trainable, updates)
+        if POSITIVE_INPUT:
+            trainable["B"] = jnp.maximum(trainable["B"], 0.0)
+        if DALE_LAW:
+            trainable["W"] = jnp.maximum(trainable["W"], 0.0)
+        current = {**trainable, **fixed_parameters}
         value = float(value)
-        train_mean, train_var, eval_mean, eval_var, activation = [float(x) for x in aux]
+        train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations = aux
+        group_errors = np.asarray(group_errors).tolist()
+        group_stds = np.sqrt(np.asarray(group_vars)).tolist()
+        group_activations = np.asarray(group_activations).tolist()
+        train_mean, train_var, eval_mean, eval_var, activation = [float(x) for x in (train_mean, train_var, eval_mean, eval_var, activation)]
         history["iterations"].append(step)
         history["overall_errors"].append(eval_mean)
         history["overall_std"].append(float(np.sqrt(eval_var)))
@@ -175,28 +240,33 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         history["lr"].append(current_lr)
         history["stage"].append(current_stage)
         history["noise_level"].append(stage_levels[current_stage])
-        if value < best_value:
-            best_value = value
+        history["current_stage"] = current_stage
+        for index, item in enumerate(item_numbers):
+            history["group_errors"][str(item)].append(group_errors[index])
+            history["group_std"][str(item)].append(group_stds[index])
+            history["group_activ"][str(item)].append(group_activations[index])
+        if value < global_best_value:
+            global_best_value = value
             best_weights = current
             history["best_model_iter"] = step
             history["best_model_loss"] = value
+        if value < stage_best_value:
+            stage_best_value = value
             steps_without_improvement = 0
+            plateau_steps = 0
         else:
             steps_without_improvement += 1
-        plateau_steps += 1
+            plateau_steps += 1
         if plateau_steps >= adaptive_lr_patience:
             current_lr *= TRAIN_LR_FACTOR
-            optimizer = optax.adam(current_lr)
-            optimizer_state = optimizer.init(current)
             history["lr_reductions"].append(step)
             plateau_steps = 0
         if steps_without_improvement >= early_stop_patience:
             if current_stage + 1 < len(stage_levels):
                 current_stage += 1
+                stage_best_value = np.inf
                 steps_without_improvement = 0
                 current_lr = learning_rate
-                optimizer = optax.adam(current_lr)
-                optimizer_state = optimizer.init(current)
                 history["stage_switch_iters"].append(step)
             else:
                 history["training_completed"] = True
@@ -205,15 +275,30 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
             TRAIN_SAVE_DIR.mkdir(parents=True, exist_ok=True)
             np.savez(TRAIN_SAVE_DIR / f"weights_iteration{step}.npz", **{name: np.asarray(x) for name, x in current.items()})
             (TRAIN_SAVE_DIR / "training_history.json").write_text(json.dumps(history, indent=2))
+            _save_training_checkpoint(
+                TRAIN_SAVE_DIR / "latest_checkpoint.pkl", current, optimizer_state,
+                history, step + 1, current_stage, current_lr, stage_best_value,
+                global_best_value, steps_without_improvement, plateau_steps,
+                best_weights, stage_levels, train_signature,
+            )
         print(f"training step {step + 1}/{steps}: total={value:.6g} eval={eval_mean:.6g} stage={current_stage + 1}/{len(stage_levels)} noise={stage_levels[current_stage]:.4g}", end="\r")
     print()
     if show_plot:
-        _plot_training(history["total_losses"])
-    history["training_completed"] = history.get("training_completed", False) or current_step + len(history["iterations"]) >= steps
+        _plot_training(history)
+    history["training_completed"] = history.get("training_completed", False) or bool(
+        history["iterations"] and history["iterations"][-1] + 1 >= steps
+    )
     history["best_weights_path"] = str(TRAIN_SAVE_DIR / "weights_best.npz")
     TRAIN_SAVE_DIR.mkdir(parents=True, exist_ok=True)
     np.savez(TRAIN_SAVE_DIR / "weights_best.npz", **{name: np.asarray(x) for name, x in best_weights.items()})
     (TRAIN_SAVE_DIR / "training_history.json").write_text(json.dumps(history, indent=2))
+    _save_training_checkpoint(
+        TRAIN_SAVE_DIR / "latest_checkpoint.pkl", current, optimizer_state,
+        history, (history["iterations"][-1] + 1) if history["iterations"] else current_step,
+        current_stage, current_lr, stage_best_value, global_best_value,
+        steps_without_improvement, plateau_steps, best_weights, stage_levels,
+        train_signature,
+    )
     return best_weights, history
 
 
@@ -321,6 +406,36 @@ def _new_history(item_numbers, stage_levels):
         "training_completed": False,
         "current_stage": 0,
     }
+
+
+def _save_training_checkpoint(path, weights, optimizer_state, history, next_step,
+                             current_stage, current_lr, stage_best_value,
+                             global_best_value, steps_without_improvement,
+                             plateau_steps, best_weights, stage_levels,
+                             train_signature):
+    """Atomically save enough state to continue the exact Optax run."""
+    import jax
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "weights": jax.tree.map(np.asarray, weights),
+        "optimizer_state": jax.tree.map(np.asarray, optimizer_state),
+        "history": history,
+        "next_step": next_step,
+        "current_stage": current_stage,
+        "current_lr": current_lr,
+        "stage_best_value": stage_best_value,
+        "global_best_value": global_best_value,
+        "steps_without_improvement": steps_without_improvement,
+        "plateau_steps": plateau_steps,
+        "best_weights": jax.tree.map(np.asarray, best_weights),
+        "stage_noise_levels": list(stage_levels),
+        "train_signature": train_signature,
+    }
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("wb") as file_handle:
+        pickle.dump(payload, file_handle, protocol=pickle.HIGHEST_PROTOCOL)
+    temporary_path.replace(path)
 
 
 def _training_batch(jax, jnp, num_trials, item_numbers, seed, input_strength):
@@ -441,13 +556,42 @@ def _trial_report(weights=None, set_size=SET_SIZE, seed=RANDOM_SEED, noise_type=
 
 def _plot_training(history):
     import matplotlib.pyplot as plt
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    plt.plot(history)
-    plt.xlabel("Training step")
-    plt.ylabel("Total loss")
-    plt.title("JAX training progress")
-    plt.grid(alpha=0.25)
-    plt.savefig(RESULTS_DIR / "training_progress.png", dpi=160)
+    iterations = history["iterations"]
+    figure, axes = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
+    axes[0].plot(iterations, history["overall_errors"], label="evaluation angular error")
+    axes[0].fill_between(
+        iterations,
+        np.asarray(history["overall_errors"]) - np.asarray(history["overall_std"]),
+        np.asarray(history["overall_errors"]) + np.asarray(history["overall_std"]),
+        alpha=0.2,
+        label="error +/- std",
+    )
+    axes[0].set_ylabel("Error (rad)")
+    axes[0].grid(alpha=0.25)
+    axes[0].legend()
+
+    axes[1].plot(iterations, history["overall_activ"], color="tab:orange", label="mean absolute activation")
+    axes[1].set_ylabel("Activation")
+    axes[1].set_xlabel("Training iteration")
+    axes[1].grid(alpha=0.25)
+    axes[1].legend()
+    figure.suptitle("Training progress")
+    figure.tight_layout()
+    figure.savefig(RESULTS_DIR / "training_progress.png", dpi=160)
+    plt.close(figure)
+
+    group_figure, group_axis = plt.subplots(figsize=(9, 5))
+    for item, values in history["group_errors"].items():
+        group_axis.plot(iterations, values, label=f"{item} item(s)")
+    group_axis.set_xlabel("Training iteration")
+    group_axis.set_ylabel("Evaluation angular error (rad)")
+    group_axis.set_title("Error by set size")
+    group_axis.grid(alpha=0.25)
+    group_axis.legend(ncol=2)
+    group_figure.tight_layout()
+    group_figure.savefig(RESULTS_DIR / "training_error_by_set_size.png", dpi=160)
     plt.show()
 
 
