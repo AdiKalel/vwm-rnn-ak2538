@@ -355,7 +355,12 @@ def _jax():
         import jax.numpy as jnp
         import optax
     except ImportError as error:
-        raise SystemExit("Install with: pip install -e 'from_scratch[jax,test]'") from error
+        raise SystemExit(
+            "JAX/Optax dependencies are missing. From inside the from_scratch directory run:\n"
+            "  pip install -e '.[jax,test]'\n"
+            "Or, from the repository root run:\n"
+            "  pip install -e 'from_scratch[jax,test]'"
+        ) from error
     return jax, jnp, optax
 
 
