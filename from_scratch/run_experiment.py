@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 # Use "file" for trained weights or "initialize" for new untrained weights.
 WEIGHTS_SOURCE = "file"
-WEIGHTS_PATH = "from_scratch/weights/derek_rad_n256_gamma03.npz"
+WEIGHTS_PATH = ROOT / "weights" / "derek_rad_n256_gamma03.npz"
 INITIALIZATION_SEED = 7
 
 # Architecture and timing.
@@ -70,8 +70,8 @@ TRAIN_LR_FACTOR = 0.5
 TRAIN_NUM_STAGES = 5
 TRAIN_MIN_NOISE_FACTOR = 1e-3
 
-RESULTS_DIR = Path("from_scratch/results")
-WEIGHTS_DIR = Path("from_scratch/weights")
+RESULTS_DIR = ROOT / "results"
+WEIGHTS_DIR = ROOT / "weights"
 TRAIN_SAVE_DIR = RESULTS_DIR / "training"
 
 
@@ -144,7 +144,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     history = _new_history(item_numbers, stage_levels)
     best_weights = current
     if resume_from is not None:
-        with Path(resume_from).open("rb") as file_handle:
+        with _resolve_local_path(resume_from).open("rb") as file_handle:
             checkpoint = pickle.load(file_handle)
         if checkpoint["stage_noise_levels"] != stage_levels:
             raise ValueError("Checkpoint noise curriculum differs from current noise_factor or num_stages")
@@ -306,7 +306,7 @@ def save_weights(weights, path=None):
     """Save explicitly supplied weights as `.npz` and return the path."""
     if weights is None:
         raise ValueError("Pass weights explicitly, normally the first result from train()")
-    path = Path(path or WEIGHTS_DIR / "weights.npz")
+    path = _resolve_local_path(path or WEIGHTS_DIR / "weights.npz")
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(path, **{name: np.asarray(value) for name, value in weights.items()})
     print(f"saved weights to {path}")
@@ -359,6 +359,20 @@ def _jax():
     return jax, jnp, optax
 
 
+def _resolve_local_path(path):
+    """Resolve defaults relative to this script, independent of shell cwd.
+
+    For convenience, user-supplied paths beginning with ``from_scratch/``
+    also work when the script is launched from the repository root.
+    """
+    path = Path(path)
+    if path.is_absolute():
+        return path
+    if path.parts and path.parts[0] == ROOT.name:
+        return ROOT.parent / path
+    return ROOT / path
+
+
 def _weights():
     import jax.numpy as jnp
     from vwm_scratch.weights import initialize_weights
@@ -369,7 +383,13 @@ def _weights():
                                     DALE_LAW, POSITIVE_INPUT, INITIALIZATION_SEED)
         return {name: jnp.asarray(getattr(source, name)) for name in ("B", "W", "F", "tau", "dale_sign")}
     if WEIGHTS_SOURCE == "file":
-        data = np.load(WEIGHTS_PATH)
+        weights_path = _resolve_local_path(WEIGHTS_PATH)
+        if not weights_path.is_file():
+            raise FileNotFoundError(
+                f"Weights not found: {weights_path}. Check WEIGHTS_PATH; "
+                "relative paths are resolved from the from_scratch folder."
+            )
+        data = np.load(weights_path)
         weights = {name: jnp.asarray(data[name]) for name in ("B", "W", "F", "tau", "dale_sign")}
         if weights["B"].shape != (NEURONS, input_dim) or weights["F"].shape != (output_dim, NEURONS):
             raise ValueError(f"Weight shapes do not match NEURONS={NEURONS}, MAX_ITEMS={MAX_ITEMS}")
