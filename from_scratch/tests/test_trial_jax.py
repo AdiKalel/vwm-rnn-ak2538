@@ -89,6 +89,29 @@ def test_supported_noise_modes_return_finite_trials():
         assert bool(jnp.isfinite(result["readouts"]).all())
 
 
+@pytest.mark.skipif(not jax_available, reason="JAX is not installed")
+def test_decode_only_readout_does_not_change_recurrent_dynamics():
+    import jax
+    import jax.numpy as jnp
+
+    from vwm_scratch.trial import compiled_trial
+    from vwm_scratch.weights import initialize_weights
+
+    reference = initialize_weights(2, 4, 2, 50.0, 300.0, seed=12)
+    weights = {name: jnp.asarray(getattr(reference, name)) for name in ("B", "W", "F", "tau", "dale_sign")}
+    inputs = jnp.ones((7, 2), dtype=jnp.float32) * 0.1
+    initial = jnp.zeros(4, dtype=jnp.float32)
+    key = jax.random.PRNGKey(17)
+    full = compiled_trial(weights, inputs, initial, 10.0, noise_type="gamma", noise_factor=0.3, key=key)
+    decode_only = compiled_trial(
+        weights, inputs, initial, 10.0,
+        noise_type="gamma", noise_factor=0.3, key=key, readout_start=4,
+    )
+    assert np.array_equal(np.asarray(full["states"]), np.asarray(decode_only["states"]))
+    assert np.all(np.asarray(decode_only["readouts"][:4]) == 0.0)
+    assert np.allclose(np.asarray(full["readouts"][4:]), np.asarray(decode_only["readouts"][4:]))
+
+
 def test_target_output_accepts_single_and_batched_trials():
     """The public trial API is one-dimensional; training is batched."""
     import jax.numpy as jnp

@@ -63,6 +63,7 @@ def run_trial(
     noise_factor: float = 0.0,
     key=None,
     store_states: bool = True,
+    readout_start: int = 0,
 ):
     """Run one trial with differentiable JAX dynamics.
 
@@ -97,9 +98,10 @@ def run_trial(
         key = jax.random.PRNGKey(0)
     effective_W = W * dale_sign[None, :]
     keys = jax.random.split(key, inputs.shape[0])
+    time_indices = jnp.arange(inputs.shape[0])
 
     def step(state, values):
-        input_t, key_t = values
+        input_t, key_t, time_index = values
         recurrent_key, readout_key = jax.random.split(key_t)
         recurrent = effective_W @ _observed_state(
             recurrent_key, state, noise_type, noise_factor, dt_ms
@@ -107,12 +109,20 @@ def run_trial(
         external = B @ input_t
         rate = _activation(recurrent + external, saturation_rate_hz)
         next_state = state + dt_ms * (-state + rate) / tau
-        readout = F @ _observed_state(
-            readout_key, next_state, noise_type, noise_factor, dt_ms
-        )
+        if readout_start <= 0:
+            readout = F @ _observed_state(
+                readout_key, next_state, noise_type, noise_factor, dt_ms
+            )
+        else:
+            readout = jax.lax.cond(
+                time_index >= readout_start,
+                lambda _: F @ _observed_state(readout_key, next_state, noise_type, noise_factor, dt_ms),
+                lambda _: jnp.zeros((F.shape[0],), dtype=next_state.dtype),
+                operand=None,
+            )
         return next_state, (next_state, readout) if store_states else readout
 
-    final_state, scan_output = jax.lax.scan(step, initial_state, (inputs, keys))
+    final_state, scan_output = jax.lax.scan(step, initial_state, (inputs, keys, time_indices))
     if store_states:
         states, readouts = scan_output
     else:
@@ -171,14 +181,15 @@ def compiled_trial(
     noise_factor: float = 0.0,
     key=None,
     store_states: bool = True,
+    readout_start: int = 0,
 ):
     """JIT-compiled trial; configuration values are compile-time constants."""
     jax, _ = _jax()
     compiled = jax.jit(
         run_trial,
-        static_argnames=("dt_ms", "saturation_rate_hz", "noise_type", "noise_factor", "store_states"),
+        static_argnames=("dt_ms", "saturation_rate_hz", "noise_type", "noise_factor", "store_states", "readout_start"),
     )
     return compiled(
         weights, inputs, initial_state, dt_ms, saturation_rate_hz,
-        noise_type, noise_factor, key, store_states,
+        noise_type, noise_factor, key, store_states, readout_start,
     )

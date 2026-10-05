@@ -208,13 +208,16 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     }.get(loss_type, loss_type)
 
     def objective(parameters, batch, keys, stage_noise):
+        decode_start = int((INIT_MS + STIMULUS_MS + DELAY_MS) / DT_MS)
         results = jax.vmap(
             lambda inputs, initial, key: jax_run_trial(
                 parameters, inputs, initial, DT_MS, SATURATION_RATE_HZ,
-                noise_type, stage_noise, key, True
+                noise_type, stage_noise, key, True, decode_start
             )
         )(batch["inputs"], batch["initial"], keys)
         readouts = results["readouts"].transpose(1, 0, 2)
+        decode_start = int((INIT_MS + STIMULUS_MS + DELAY_MS) / DT_MS)
+        readouts = readouts[decode_start:]
         states = results["states"].transpose(1, 0, 2)
         target_output = _target_output(jnp, batch["theta"], batch["presence"])
         train_mean, train_var, eval_mean, eval_var = training_loss(
@@ -742,3 +745,15 @@ if __name__ == "__main__":
     print("check: total_loss - error_loss - activation_loss =", tloss - eloss - aloss)
     print('this is changed')
     train(steps=100, show_plot=True, num_trials=100, item_numbers=(1,), logging_period=10)
+    weights, history = train(
+        steps=20,
+        stage=1,
+        verification_period=100,
+        )
+
+    #weights, history = train(
+     #   steps=2000,
+      #  stage=2,
+       # resume_from="from_scratch/results/training/latest_checkpoint.pkl",
+        #verification_period=100,
+    #)   
