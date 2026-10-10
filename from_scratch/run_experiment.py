@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 import json
 import pickle
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -341,8 +342,13 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
                 global_best_value, steps_without_improvement, plateau_steps,
                 best_weights, stage_levels, train_signature,
             )
-        print(f"training step {step + 1}/{steps}: total={value:.6g} eval={eval_mean:.6g} stage={current_stage + 1}/{len(stage_levels)} noise={stage_levels[current_stage]:.4g}", end="\r")
-    print()
+        print(
+            f"{datetime.now().astimezone().isoformat(timespec='seconds')} "
+            f"training step {step + 1}/{steps}: total={value:.6g} "
+            f"eval={eval_mean:.6g} stage={current_stage + 1}/{len(stage_levels)} "
+            f"noise={stage_levels[current_stage]:.4g}",
+            flush=True,
+        )
     if show_plot:
         _plot_training(history)
     history["stage_completed"] = history.get("stage_completed", False) or stage_call_completed
@@ -695,7 +701,7 @@ if __name__ == "__main__":
     # Running this file directly performs one visible 1-item demonstration.
     # In your own code, use `print(run_trial.eloss(...))`: the loss methods
     # return numbers and do not print automatically.
-    print("multi-item trial with the current KNOBS...")
+    print("multi-item trial with the current KNOBS test...")
     weights = _weights()
     report = run_trial(weights=weights, set_size=1, store_states=True)
     print(f"total_loss      = {report['total_loss']:.6g}")
@@ -727,19 +733,19 @@ if __name__ == "__main__":
     plt.plot(items, eloss, label="error loss")
     plt.xlabel("Set size")
     plt.ylabel("Error loss")
-    plt.title("Loss vs set size")
+    plt.title("Error loss vs set size")
     plt.legend()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    #plt.savefig(RESULTS_DIR / "loss_vs_set_size.png", dpi=160, bbox_inches="tight")
+    #plt.savefig(RESULTS_DIR / "eloss_vs_set_size.png", dpi=160, bbox_inches="tight")
     plt.show()
 
     plt.plot(items, aloss, label="activation loss")
     plt.xlabel("Set size")
     plt.ylabel("Activation loss")
-    plt.title("Loss vs set size")
+    plt.title("Activation loss vs set size")
     plt.legend()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    #plt.savefig(RESULTS_DIR / "loss_vs_set_size.png", dpi=160, bbox_inches="tight")
+    #plt.savefig(RESULTS_DIR / "aloss_vs_set_size.png", dpi=160, bbox_inches="tight")
     plt.show()
     #print(f"saved graph to {RESULTS_DIR / 'loss_vs_set_size.png'}")
     print("check: total_loss - error_loss - activation_loss =", tloss - eloss - aloss)

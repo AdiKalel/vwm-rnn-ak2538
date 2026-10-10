@@ -175,6 +175,26 @@ At the observed 30 minutes per 100 steps, 40,000 steps would take about 200
 hours if the rate stayed constant. Benchmark on GPU before starting the full
 run. Multi-GPU sharding is not implemented yet; a single GPU is supported.
 
+## Benchmark Derek's PyTorch step against JAX on CBL
+
+The benchmark script runs each framework in a separate process on the same GPU
+and uses the root `config.yaml`, the same N256 weights, batch size, task length,
+noise level, loss, and optimizer settings. It measures training forward,
+backward, and update steps. From inside `from_scratch/`, run:
+
+```bash
+python scripts/benchmark_training.py --backend torch --warmup 2 --steps 10
+.venv/bin/python scripts/benchmark_training.py --backend jax --warmup 2 --steps 10
+python scripts/benchmark_training.py --backend summary
+```
+
+After the short check, increase `--steps` to 30-50 for a steadier estimate.
+The JAX report separates compilation/first-step time from steady-state timing.
+The summary projects 40,000 steady-state steps; it excludes verification,
+checkpoint writes, and plotting, so treat the projection as a lower bound. Run
+the backends sequentially, not concurrently, on the same `--gpu` index. The
+script refuses to benchmark a backend that is not using CUDA.
+
 Resume an interrupted run without resetting Adam state:
 
 ```python
