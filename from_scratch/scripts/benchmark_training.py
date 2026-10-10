@@ -251,7 +251,7 @@ def benchmark_torch(settings, weights_path, warmup, steps, gpu_index, batch_np):
         activity, _ = model(inputs)
         decode_states = activity[:, decode_start:, :]
         readouts = model.readout(decode_states.reshape(-1, settings["neurons"]))
-        readouts = readouts.reshape(decode_states.shape[1], inputs.shape[0], -1)
+        readouts = readouts.reshape(inputs.shape[0], decode_states.shape[1], -1)
         readouts = readouts.permute(1, 0, 2)
         error = _torch_loss(torch, readouts, theta, presence, settings["loss_type"])
         activation = activity.abs().mean()
