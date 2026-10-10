@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 import json
 import pickle
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -250,6 +251,23 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     def trainable_objective(parameters, batch, keys, stage_noise):
         return objective({**parameters, **fixed_parameters}, batch, keys, stage_noise)
 
+    def compiled_update(parameters, state, batch, keys, stage_noise, lr):
+        (loss, aux), gradients = jax.value_and_grad(trainable_objective, has_aux=True)(
+            parameters, batch, keys, stage_noise
+        )
+        updates, state = optimizer.update(gradients, state, parameters)
+        updates = jax.tree.map(lambda update: -lr * update, updates)
+        parameters = optax.apply_updates(parameters, updates)
+        if POSITIVE_INPUT:
+            parameters = {**parameters, "B": jnp.maximum(parameters["B"], 0.0)}
+        if DALE_LAW:
+            parameters = {**parameters, "W": jnp.maximum(parameters["W"], 0.0)}
+        return parameters, state, loss, aux
+
+    # Fuse rollout, reverse-mode gradients, Adam, and Dale/input projections
+    # into one device executable. The stage noise and LR are scalar arguments,
+    # so changing them does not trigger a new compilation.
+    compiled_update = jax.jit(compiled_update, static_argnames=("stage_noise",))
     compiled_objective = jax.jit(trainable_objective, static_argnames=("stage_noise",))
     verification_batch = _training_batch(
         jax, jnp, num_trials, item_numbers, RANDOM_SEED + 900000,
@@ -259,39 +277,19 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     stage_call_completed = False
     starting_history_count = len(history["iterations"])
     for step in range(current_step, steps):
+        step_started = time.perf_counter()
         if current_stage >= len(stage_levels):
             break
         batch = _training_batch(jax, jnp, num_trials, item_numbers, RANDOM_SEED + step, input_strength=INPUT_STRENGTH)
         keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 100000 + step), num_trials)
-        value_aux, gradients = jax.value_and_grad(compiled_objective, has_aux=True)(trainable, batch, keys, stage_levels[current_stage])
-        value, aux = value_aux
-        updates, optimizer_state = optimizer.update(gradients, optimizer_state, trainable)
-        updates = jax.tree.map(lambda update: -current_lr * update, updates)
-        trainable = optax.apply_updates(trainable, updates)
-        if POSITIVE_INPUT:
-            trainable["B"] = jnp.maximum(trainable["B"], 0.0)
-        if DALE_LAW:
-            trainable["W"] = jnp.maximum(trainable["W"], 0.0)
+        trainable, optimizer_state, value, aux = compiled_update(
+            trainable, optimizer_state, batch, keys, stage_levels[current_stage], current_lr
+        )
         current = {**trainable, **fixed_parameters}
         value = float(value)
-        train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations = aux
-        group_errors = np.asarray(group_errors).tolist()
-        group_stds = np.sqrt(np.asarray(group_vars)).tolist()
-        group_activations = np.asarray(group_activations).tolist()
-        train_mean, train_var, eval_mean, eval_var, activation = [float(x) for x in (train_mean, train_var, eval_mean, eval_var, activation)]
-        history["iterations"].append(step)
-        history["overall_errors"].append(eval_mean)
-        history["overall_std"].append(float(np.sqrt(eval_var)))
-        history["overall_activ"].append(activation)
+        report_step = step % logging_period == 0 or step == steps - 1
+        eval_display = float(aux[2]) if report_step else None
         history["total_losses"].append(value)
-        history["lr"].append(current_lr)
-        history["stage"].append(current_stage)
-        history["noise_level"].append(stage_levels[current_stage])
-        history["current_stage"] = current_stage
-        for index, item in enumerate(item_numbers):
-            history["group_errors"][str(item)].append(group_errors[index])
-            history["group_std"][str(item)].append(group_stds[index])
-            history["group_activ"][str(item)].append(group_activations[index])
         if value < global_best_value:
             global_best_value = value
             best_weights = current
@@ -331,7 +329,26 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
             history["verification_errors"].append(validation_error)
             print()
             print(f"  verification at step {step + 1}: angular_error={validation_error:.6g}")
-        if step % logging_period == 0 or step == steps - 1:
+        if report_step:
+            train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations = aux
+            group_errors = np.asarray(group_errors).tolist()
+            group_stds = np.sqrt(np.asarray(group_vars)).tolist()
+            group_activations = np.asarray(group_activations).tolist()
+            train_mean, train_var, eval_mean, eval_var, activation = [
+                float(x) for x in (train_mean, train_var, eval_mean, eval_var, activation)
+            ]
+            history["iterations"].append(step)
+            history["overall_errors"].append(eval_mean)
+            history["overall_std"].append(float(np.sqrt(eval_var)))
+            history["overall_activ"].append(activation)
+            history["lr"].append(current_lr)
+            history["stage"].append(current_stage)
+            history["noise_level"].append(stage_levels[current_stage])
+            history["current_stage"] = current_stage
+            for index, item in enumerate(item_numbers):
+                history["group_errors"][str(item)].append(group_errors[index])
+                history["group_std"][str(item)].append(group_stds[index])
+                history["group_activ"][str(item)].append(group_activations[index])
             TRAIN_SAVE_DIR.mkdir(parents=True, exist_ok=True)
             np.savez(TRAIN_SAVE_DIR / f"weights_iteration{step}.npz", **{name: np.asarray(x) for name, x in current.items()})
             (TRAIN_SAVE_DIR / "training_history.json").write_text(json.dumps(history, indent=2))
@@ -342,13 +359,15 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
                 global_best_value, steps_without_improvement, plateau_steps,
                 best_weights, stage_levels, train_signature,
             )
-        print(
-            f"{datetime.now().astimezone().isoformat(timespec='seconds')} "
+        progress = [
+            f"{datetime.now().astimezone().isoformat(timespec='seconds')}",
             f"training step {step + 1}/{steps}: total={value:.6g} "
-            f"eval={eval_mean:.6g} stage={current_stage + 1}/{len(stage_levels)} "
-            f"noise={stage_levels[current_stage]:.4g}",
-            flush=True,
-        )
+            f"elapsed={time.perf_counter() - step_started:.3f}s",
+        ]
+        if eval_display is not None:
+            progress.append(f"eval={eval_display:.6g}")
+        progress.extend((f"stage={current_stage + 1}/{len(stage_levels)}", f"noise={stage_levels[current_stage]:.4g}"))
+        print(" ".join(progress), flush=True)
     if show_plot:
         _plot_training(history)
     history["stage_completed"] = history.get("stage_completed", False) or stage_call_completed
