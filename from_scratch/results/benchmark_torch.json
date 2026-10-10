@@ -1,0 +1,31 @@
+{
+  "backend": "torch",
+  "device": "NVIDIA GeForce RTX 2080 Ti",
+  "warmup_steps": 2,
+  "measured_steps": 10,
+  "seconds_per_step": [
+    0.29800577368587255,
+    0.26267861388623714,
+    0.26636884920299053,
+    0.2838571174070239,
+    0.30425500869750977,
+    0.28750862646847963,
+    0.3102546874433756,
+    0.306520102545619,
+    0.30319560039788485,
+    0.2781979329884052
+  ],
+  "mean_seconds_per_step": 0.29008423127233984,
+  "median_seconds_per_step": 0.2927572000771761,
+  "peak_memory_bytes": 728061952,
+  "final_loss": 0.7768223881721497,
+  "config": "/homes/ak2538/projects/vwm-rnn-ak2538/config.yaml",
+  "weights": "/homes/ak2538/projects/vwm-rnn-ak2538/from_scratch/weights/derek_rad_n256_gamma03.npz",
+  "gpu_index": 0,
+  "batch_size": 300,
+  "sequence_steps": 202,
+  "neurons": 256,
+  "loss_type": "norml2",
+  "noise_type": "gamma",
+  "noise_factor": 0.5
+}

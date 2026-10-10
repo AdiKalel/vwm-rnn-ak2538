@@ -1,0 +1,33 @@
+{
+  "backend": "jax",
+  "devices": [
+    "cuda:0"
+  ],
+  "compile_plus_first_step_seconds": 5.608510075137019,
+  "warmup_steps": 2,
+  "measured_steps": 10,
+  "seconds_per_step": [
+    0.8359399661421776,
+    0.9256402514874935,
+    0.9214302422478795,
+    0.8352044373750687,
+    0.8552606133744121,
+    0.8320205751806498,
+    0.8501495374366641,
+    0.7612385340034962,
+    0.838441751897335,
+    0.8083374705165625
+  ],
+  "mean_seconds_per_step": 0.8463663379661739,
+  "median_seconds_per_step": 0.8371908590197563,
+  "final_loss": 0.7648640275001526,
+  "config": "/homes/ak2538/projects/vwm-rnn-ak2538/config.yaml",
+  "weights": "/homes/ak2538/projects/vwm-rnn-ak2538/from_scratch/weights/derek_rad_n256_gamma03.npz",
+  "gpu_index": 0,
+  "batch_size": 300,
+  "sequence_steps": 202,
+  "neurons": 256,
+  "loss_type": "norml2",
+  "noise_type": "gamma",
+  "noise_factor": 0.5
+}
