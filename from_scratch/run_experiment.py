@@ -269,6 +269,9 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     # so changing them does not trigger a new compilation.
     compiled_update = jax.jit(compiled_update, static_argnames=("stage_noise",))
     compiled_objective = jax.jit(trainable_objective, static_argnames=("stage_noise",))
+    batch_generator = _compiled_training_batch(
+        jax, jnp, num_trials, item_numbers, input_strength=INPUT_STRENGTH
+    )
     verification_batch = _training_batch(
         jax, jnp, num_trials, item_numbers, RANDOM_SEED + 900000,
         input_strength=INPUT_STRENGTH,
@@ -280,7 +283,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         step_started = time.perf_counter()
         if current_stage >= len(stage_levels):
             break
-        batch = _training_batch(jax, jnp, num_trials, item_numbers, RANDOM_SEED + step, input_strength=INPUT_STRENGTH)
+        batch = batch_generator(jax.random.PRNGKey(RANDOM_SEED + step))
         keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 100000 + step), num_trials)
         trainable, optimizer_state, value, aux = compiled_update(
             trainable, optimizer_state, batch, keys, stage_levels[current_stage], current_lr
@@ -589,6 +592,50 @@ def _training_batch(jax, jnp, num_trials, item_numbers, seed, input_strength):
     mask = ((times >= INIT_MS) & (times < INIT_MS + STIMULUS_MS))[None, :, None]
     inputs = encoded[:, None, :] * mask * input_strength / MAX_ITEMS
     return {"inputs": inputs, "initial": jnp.zeros((num_trials, NEURONS)), "theta": theta, "presence": presence, "set_sizes": jnp.asarray(set_sizes)}
+
+
+def _compiled_training_batch(jax, jnp, num_trials, item_numbers, input_strength):
+    """Build one JIT batch sampler and reuse it for every training iteration."""
+    item_numbers = np.asarray(item_numbers, dtype=np.int32)
+    counts = np.full(len(item_numbers), num_trials // len(item_numbers), dtype=np.int32)
+    counts[: num_trials % len(item_numbers)] += 1
+    set_sizes = jnp.asarray(np.repeat(item_numbers, counts))
+    if set_sizes.shape[0] != num_trials:
+        raise ValueError("num_trials must be at least the number of item groups")
+    time = jnp.arange(_steps()) * DT_MS
+    stimulus_mask = ((time >= INIT_MS) & (time < INIT_MS + STIMULUS_MS)).astype(jnp.float32)
+
+    def generate(key):
+        theta_key, presence_key, sensory_key = jax.random.split(key, 3)
+        theta = jax.random.uniform(theta_key, (num_trials, MAX_ITEMS), minval=-jnp.pi, maxval=jnp.pi)
+        row_keys = jax.random.split(presence_key, num_trials)
+
+        def make_presence(row_key, count):
+            permutation = jax.random.permutation(row_key, MAX_ITEMS)
+            selected = (jnp.arange(MAX_ITEMS) < count).astype(jnp.float32)
+            return jnp.zeros(MAX_ITEMS, dtype=jnp.float32).at[permutation].set(selected)
+
+        presence = jax.vmap(make_presence)(row_keys, set_sizes)
+        theta_input = theta + SENSORY_NOISE_RAD * jax.random.normal(sensory_key, theta.shape)
+        if POSITIVE_INPUT:
+            encoded = jnp.stack((
+                1 + jnp.cos(theta_input) / jnp.sqrt(2) + jnp.sin(theta_input) / jnp.sqrt(6),
+                1 - jnp.cos(theta_input) / jnp.sqrt(2) + jnp.sin(theta_input) / jnp.sqrt(6),
+                1 - 2 * jnp.sin(theta_input) / jnp.sqrt(6),
+            ), axis=-1)
+        else:
+            encoded = jnp.stack((jnp.cos(theta_input), jnp.sin(theta_input)), axis=-1)
+        encoded = (encoded * presence[:, :, None]).reshape(num_trials, -1)
+        inputs = encoded[:, None, :] * stimulus_mask[None, :, None] * input_strength / MAX_ITEMS
+        return {
+            "inputs": inputs,
+            "initial": jnp.zeros((num_trials, NEURONS), dtype=jnp.float32),
+            "theta": theta,
+            "presence": presence,
+            "set_sizes": set_sizes,
+        }
+
+    return jax.jit(generate)
 
 
 def _trial_data(jax, jnp, set_size, seed, sensory_noise_rad=SENSORY_NOISE_RAD,

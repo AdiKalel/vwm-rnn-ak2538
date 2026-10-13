@@ -98,10 +98,9 @@ def run_trial(
         key = jax.random.PRNGKey(0)
     effective_W = W * dale_sign[None, :]
     keys = jax.random.split(key, inputs.shape[0])
-    time_indices = jnp.arange(inputs.shape[0])
 
     def step(state, values):
-        input_t, key_t, time_index = values
+        input_t, key_t = values
         recurrent_key, readout_key = jax.random.split(key_t)
         recurrent = effective_W @ _observed_state(
             recurrent_key, state, noise_type, noise_factor, dt_ms
@@ -109,26 +108,24 @@ def run_trial(
         external = B @ input_t
         rate = _activation(recurrent + external, saturation_rate_hz)
         next_state = state + dt_ms * (-state + rate) / tau
-        if readout_start <= 0:
-            readout = F @ _observed_state(
-                readout_key, next_state, noise_type, noise_factor, dt_ms
-            )
-        else:
-            readout = jax.lax.cond(
-                time_index >= readout_start,
-                lambda _: F @ _observed_state(readout_key, next_state, noise_type, noise_factor, dt_ms),
-                lambda _: jnp.zeros((F.shape[0],), dtype=next_state.dtype),
-                operand=None,
-            )
-        return next_state, (next_state, readout) if store_states else readout
+        return next_state, (next_state, readout_key)
 
-    final_state, scan_output = jax.lax.scan(step, initial_state, (inputs, keys, time_indices))
-    if store_states:
-        states, readouts = scan_output
+    final_state, (all_states, readout_keys) = jax.lax.scan(step, initial_state, (inputs, keys))
+    selected_states = all_states[readout_start:]
+    selected_keys = readout_keys[readout_start:]
+    selected_readouts = jax.vmap(
+        lambda state, readout_key: F @ _observed_state(
+            readout_key, state, noise_type, noise_factor, dt_ms
+        )
+    )(selected_states, selected_keys)
+    if readout_start > 0:
+        readouts = jnp.zeros((readout_start, F.shape[0]), dtype=selected_readouts.dtype)
+        readouts = jnp.concatenate((readouts, selected_readouts), axis=0)
     else:
-        states, readouts = None, scan_output
+        readouts = selected_readouts
+    states = all_states if store_states else None
     return {
-        "states": states if store_states else None,
+        "states": states,
         "readouts": readouts,
         "final_state": final_state,
     }
