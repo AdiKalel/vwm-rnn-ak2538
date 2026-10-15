@@ -7,6 +7,11 @@ releases GPU memory before the other starts:
     .venv/Scripts/python.exe from_scratch/scripts/benchmark_training.py --backend jax --warmup 2 --steps 10
     python from_scratch/scripts/benchmark_training.py --backend summary
 
+To also capture short profiler traces, add --profile-dir to each run:
+
+    python scripts/benchmark_training.py --backend torch --steps 30 --profile-dir results/torch_trace
+    .venv/bin/python scripts/benchmark_training.py --backend jax --steps 30 --profile-dir results/jax_trace
+
 On CBL, run the equivalent commands from the checkout. Use a longer measured
 run (e.g. --steps 50) after the short check. This measures optimizer steps on
 the same fixed, config-matched batch; JAX compile time is reported separately.
@@ -114,7 +119,7 @@ def _numpy_training_loss_jax(jnp, readouts, theta, presence, error_type):
     return training_loss(readouts, target, theta, presence, error_type)[0]
 
 
-def benchmark_jax(settings, weights_path, warmup, steps, gpu_index):
+def benchmark_jax(settings, weights_path, warmup, steps, gpu_index, profile_dir=None, profile_steps=3):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
     import jax
     import jax.numpy as jnp
@@ -172,6 +177,14 @@ def benchmark_jax(settings, weights_path, warmup, steps, gpu_index):
         trainable, optimizer_state, loss = step(trainable, optimizer_state)
     loss.block_until_ready()
 
+    if profile_dir is not None:
+        profile_path = Path(profile_dir).resolve()
+        profile_path.mkdir(parents=True, exist_ok=True)
+        with jax.profiler.trace(str(profile_path), create_perfetto_link=False):
+            for _ in range(profile_steps):
+                trainable, optimizer_state, loss = step(trainable, optimizer_state)
+            loss.block_until_ready()
+
     timings = []
     for _ in range(steps):
         start = time.perf_counter()
@@ -189,6 +202,7 @@ def benchmark_jax(settings, weights_path, warmup, steps, gpu_index):
         "mean_seconds_per_step": statistics.mean(timings),
         "median_seconds_per_step": statistics.median(timings),
         "final_loss": float(loss),
+        "profile_trace": str(Path(profile_dir).resolve()) if profile_dir is not None else None,
     }
 
 
@@ -216,7 +230,8 @@ def _torch_loss(torch, readouts, theta, presence, error_type):
     return per_trial.mean()
 
 
-def benchmark_torch(settings, weights_path, warmup, steps, gpu_index, batch_np):
+def benchmark_torch(settings, weights_path, warmup, steps, gpu_index, batch_np,
+                    profile_dir=None, profile_steps=3):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
     import torch
     sys.path.insert(0, str(REPO_ROOT))
@@ -269,6 +284,25 @@ def benchmark_torch(settings, weights_path, warmup, steps, gpu_index, batch_np):
     for _ in range(warmup):
         loss = step()
     torch.cuda.synchronize()
+
+    profile_trace = None
+    if profile_dir is not None:
+        from pathlib import Path
+
+        profile_path = Path(profile_dir).resolve()
+        profile_path.mkdir(parents=True, exist_ok=True)
+        profile_trace = profile_path / "torch_training_trace.json"
+        activities = [torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
+        with torch.profiler.profile(
+            activities=activities,
+            record_shapes=True,
+            profile_memory=True,
+        ) as profiler:
+            for _ in range(profile_steps):
+                step()
+                profiler.step()
+            torch.cuda.synchronize()
+        profiler.export_chrome_trace(str(profile_trace))
     torch.cuda.reset_peak_memory_stats()
     timings = []
     for _ in range(steps):
@@ -287,6 +321,7 @@ def benchmark_torch(settings, weights_path, warmup, steps, gpu_index, batch_np):
         "median_seconds_per_step": statistics.median(timings),
         "peak_memory_bytes": torch.cuda.max_memory_allocated(),
         "final_loss": float(loss),
+        "profile_trace": str(profile_trace) if profile_trace is not None else None,
     }
 
 
@@ -298,6 +333,8 @@ def main():
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--steps", type=int, default=10)
+    parser.add_argument("--profile-dir", type=Path, help="Optional directory for a short profiler trace")
+    parser.add_argument("--profile-steps", type=int, default=3)
     args = parser.parse_args()
     if args.backend == "summary":
         reports = [json.loads(path.read_text()) for path in (RESULTS / "benchmark_torch.json", RESULTS / "benchmark_jax.json")]
@@ -316,9 +353,11 @@ def main():
         raise ValueError("Weights neuron dimension does not match benchmark config")
     batch_np = make_fixed_batch(settings, seed=128)
     if args.backend == "jax":
-        report = benchmark_jax(settings, args.weights.resolve(), args.warmup, args.steps, args.gpu)
+        report = benchmark_jax(settings, args.weights.resolve(), args.warmup, args.steps, args.gpu,
+                               profile_dir=args.profile_dir, profile_steps=args.profile_steps)
     else:
-        report = benchmark_torch(settings, args.weights.resolve(), args.warmup, args.steps, args.gpu, batch_np)
+        report = benchmark_torch(settings, args.weights.resolve(), args.warmup, args.steps, args.gpu, batch_np,
+                                 profile_dir=args.profile_dir, profile_steps=args.profile_steps)
     report.update({"config": str(args.config.resolve()), "weights": str(args.weights.resolve()),
                    "gpu_index": args.gpu, "batch_size": settings["num_trials"],
                    "sequence_steps": batch_np["inputs"].shape[1], "neurons": settings["neurons"],
