@@ -98,6 +98,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         item_numbers=TRAIN_ITEM_NUM, logging_period=TRAIN_LOGGING_PERIOD,
         checkpoint_period=TRAIN_CHECKPOINT_PERIOD,
         verification_period=TRAIN_VERIFY_PERIOD,
+        profile_dir=None, profile_steps=3,
         early_stop_patience=TRAIN_EARLY_STOP_PATIENCE,
         adaptive_lr_patience=TRAIN_ADAPTIVE_LR_PATIENCE,
         num_stages=TRAIN_NUM_STAGES, stage=None, resume_from=None):
@@ -114,6 +115,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     iteration for automatic/resumed training and the step budget for a fresh
     manual stage. ``verification_period`` controls a separate fixed validation
     batch; ``checkpoint_period`` controls full resumable checkpoint writes.
+    Set ``profile_dir`` to capture the first ``profile_steps`` real iterations.
     """
     jax, jnp, optax = _jax()
     from vwm_scratch.losses import training_loss
@@ -279,10 +281,19 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     verification_keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 900001), num_trials)
     stage_call_completed = False
     starting_history_count = len(history["iterations"])
+    profile_path = _resolve_local_path(profile_dir) if profile_dir is not None else None
+    profile_started = False
+    profile_finished = False
+    if profile_steps < 1:
+        raise ValueError("profile_steps must be at least 1")
     for step in range(current_step, steps):
         step_started = time.perf_counter()
         if current_stage >= len(stage_levels):
             break
+        if profile_path is not None and not profile_started:
+            profile_path.mkdir(parents=True, exist_ok=True)
+            jax.profiler.start_trace(str(profile_path), create_perfetto_link=False)
+            profile_started = True
         batch = batch_generator(jax.random.PRNGKey(RANDOM_SEED + step))
         keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 100000 + step), num_trials)
         trainable, optimizer_state, value, aux = compiled_update(
@@ -371,6 +382,14 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
             progress.append(f"eval={eval_display:.6g}")
         progress.extend((f"stage={current_stage + 1}/{len(stage_levels)}", f"noise={stage_levels[current_stage]:.4g}"))
         print(" ".join(progress), flush=True)
+        if profile_started and not profile_finished:
+            if step - current_step + 1 >= profile_steps:
+                jax.profiler.stop_trace()
+                profile_finished = True
+                print(f"JAX profile saved to {profile_path}", flush=True)
+    if profile_started and not profile_finished:
+        jax.profiler.stop_trace()
+        print(f"JAX profile saved to {profile_path}", flush=True)
     if show_plot:
         _plot_training(history)
     history["stage_completed"] = history.get("stage_completed", False) or stage_call_completed
@@ -767,7 +786,7 @@ if __name__ == "__main__":
     # Running this file directly performs one visible 1-item demonstration.
     # In your own code, use `print(run_trial.eloss(...))`: the loss methods
     # return numbers and do not print automatically.
-    print("multi-item trial with the current KNOBS test...")
+    print("multi-item trial with changing noise factor...")
     weights = _weights()
     report = run_trial(weights=weights, set_size=1, store_states=True)
     print(f"total_loss      = {report['total_loss']:.6g}")
@@ -779,39 +798,40 @@ if __name__ == "__main__":
     tloss = np.zeros(10)
     eloss = np.zeros(10)
     aloss = np.zeros(10)
-    items = np.zeros(10)
+    noise = np.zeros(10)
 
     for i in range(10):
         # Keep states because activation_loss is mean(abs(state)); setting
         # store_states=False is only valid when plotting error/total loss.
         total_eloss = 0
         total_aloss = 0
-        for j in range(10):
-            report = run_trial(weights=weights, set_size= i + 1, seed=i*10 + j, store_states=True)
+        for j in range(100):
+            report = run_trial(weights=weights, set_size= 2, seed=i*100 + j, store_states=True, noise_factor=0.1 * i)
             total_eloss += report["error_loss"]
-            print(f"set_size={i + 1}, seed={i*10 + j}, error_loss={report['error_loss']:.6g}, activation_loss={report['activation_loss']:.6g}")
+            print(f"set_size={2}, seed={i*100 + j}, error_loss={report['error_loss']:.6g}, activation_loss={report['activation_loss']:.6g}")
             total_aloss += report["activation_loss"]
-        eloss[i] = total_eloss / 10
-        aloss[i] = total_aloss / 10
-        items[i] = report["conditions"]["set_size"]
+        eloss[i] = total_eloss / 100
+        tloss[i] = (total_eloss + total_aloss) / 100
+        aloss[i] = total_aloss / 100
+        noise[i] = 0.1 * i
 
     
-    plt.plot(items, eloss, label="error loss")
-    plt.xlabel("Set size")
+    plt.plot(noise, eloss, label="error loss")
+    plt.xlabel("Noise")
     plt.ylabel("Error loss")
-    plt.title("Error loss vs set size")
+    plt.title("Error loss vs noise")
     plt.legend()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    #plt.savefig(RESULTS_DIR / "eloss_vs_set_size.png", dpi=160, bbox_inches="tight")
+    plt.savefig(RESULTS_DIR / "eloss_vs_noise.png", dpi=160, bbox_inches="tight")
     plt.show()
 
-    plt.plot(items, aloss, label="activation loss")
-    plt.xlabel("Set size")
+    plt.plot(noise, aloss, label="activation loss")
+    plt.xlabel("Noise")
     plt.ylabel("Activation loss")
-    plt.title("Activation loss vs set size")
+    plt.title("Activation loss vs noise")
     plt.legend()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    #plt.savefig(RESULTS_DIR / "aloss_vs_set_size.png", dpi=160, bbox_inches="tight")
+    plt.savefig(RESULTS_DIR / "aloss_vs_noise.png", dpi=160, bbox_inches="tight")
     plt.show()
     #print(f"saved graph to {RESULTS_DIR / 'loss_vs_set_size.png'}")
     print("check: total_loss - error_loss - activation_loss =", tloss - eloss - aloss)
