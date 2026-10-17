@@ -805,14 +805,14 @@ if __name__ == "__main__":
         # store_states=False is only valid when plotting error/total loss.
         total_eloss = 0
         total_aloss = 0
-        for j in range(100):
+        for j in range(10):
             report = run_trial(weights=weights, set_size= 2, seed=i*100 + j, store_states=True, noise_factor=0.1 * i)
             total_eloss += report["error_loss"]
             print(f"set_size={2}, seed={i*100 + j}, error_loss={report['error_loss']:.6g}, activation_loss={report['activation_loss']:.6g}")
             total_aloss += report["activation_loss"]
-        eloss[i] = total_eloss / 100
-        tloss[i] = (total_eloss + total_aloss) / 100
-        aloss[i] = total_aloss / 100
+        eloss[i] = total_eloss / 10
+        tloss[i] = (total_eloss + total_aloss) / 10
+        aloss[i] = total_aloss / 10
         noise[i] = 0.1 * i
 
     
@@ -836,11 +836,12 @@ if __name__ == "__main__":
     #print(f"saved graph to {RESULTS_DIR / 'loss_vs_set_size.png'}")
     print("check: total_loss - error_loss - activation_loss =", tloss - eloss - aloss)
     print('this is changed')
-    train(steps=100, show_plot=True, num_trials=100, item_numbers=(1,), logging_period=10)
+    train(steps=100, show_plot=True, num_trials=300, item_numbers=(1,), logging_period=10, neurons = 128)
     weights, history = train(
         steps=20,
         stage=1,
         verification_period=100,
+        neurons = 128,
         )
 
     #weights, history = train(
