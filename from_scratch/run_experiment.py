@@ -786,7 +786,7 @@ if __name__ == "__main__":
     # Running this file directly performs one visible 1-item demonstration.
     # In your own code, use `print(run_trial.eloss(...))`: the loss methods
     # return numbers and do not print automatically.
-    print("multi-item trial with changing noise factor...")
+    print("changed neurons to 128")
     weights = _weights()
     report = run_trial(weights=weights, set_size=1, store_states=True)
     print(f"total_loss      = {report['total_loss']:.6g}")
