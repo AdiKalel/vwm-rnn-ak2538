@@ -91,7 +91,7 @@ def CUSTOM_LOSS(predicted_output, target_output, presence):
 # =============================================================================
 
 
-def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
+def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
           learning_rate=LEARNING_RATE, set_size=TRAIN_SET_SIZE,
           noise_type=TRAIN_NOISE_TYPE, noise_factor=TRAIN_NOISE_FACTOR,
         show_plot=True, num_trials=TRAIN_NUM_TRIALS,
@@ -116,6 +116,9 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     manual stage. ``verification_period`` controls a separate fixed validation
     batch; ``checkpoint_period`` controls full resumable checkpoint writes.
     Set ``profile_dir`` to capture the first ``profile_steps`` real iterations.
+
+    ``neurons`` sets the network size. Without ``weights``, any size other than
+    ``NEURONS`` starts from fresh initialization; supplied ``weights`` fix it.
     """
     jax, jnp, optax = _jax()
     from vwm_scratch.losses import training_loss
@@ -123,7 +126,20 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
 
     print(f"JAX training devices: {jax.devices()}")
 
-    current = _weights() if weights is None else weights
+    if weights is not None:
+        weight_neurons = int(weights["B"].shape[0])
+        if neurons is not None and int(neurons) != weight_neurons:
+            raise ValueError(f"neurons={neurons} does not match the supplied weights ({weight_neurons})")
+        neurons = weight_neurons
+        current = weights
+    else:
+        neurons = NEURONS if neurons is None else int(neurons)
+        weights_source = WEIGHTS_SOURCE
+        if weights_source == "file" and neurons != NEURONS:
+            # The weights file has a fixed size, so other sizes cannot load it.
+            weights_source = "initialize"
+            print(f"Initializing fresh {neurons}-neuron weights (the weights file has {NEURONS}).")
+        current = _weights(neurons, weights_source)
     fixed_parameters = {name: current[name] for name in ("tau", "dale_sign")}
     trainable = {name: current[name] for name in ("B", "W", "F")}
     if loss_type == "custom":
@@ -149,7 +165,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
         "dt_ms": DT_MS,
         "input_strength": INPUT_STRENGTH,
         "max_items": MAX_ITEMS,
-        "neurons": NEURONS,
+        "neurons": neurons,
     }
     if stage is not None and not 1 <= stage <= len(stage_levels):
         raise ValueError(f"stage must be between 1 and {len(stage_levels)}")
@@ -272,11 +288,11 @@ def train(*, steps=TRAIN_STEPS, weights=None, loss_type=LOSS_TYPE,
     compiled_update = jax.jit(compiled_update, static_argnames=("stage_noise",))
     compiled_objective = jax.jit(trainable_objective, static_argnames=("stage_noise",))
     batch_generator = _compiled_training_batch(
-        jax, jnp, num_trials, item_numbers, input_strength=INPUT_STRENGTH
+        jax, jnp, num_trials, item_numbers, input_strength=INPUT_STRENGTH, neurons=neurons
     )
     verification_batch = _training_batch(
         jax, jnp, num_trials, item_numbers, RANDOM_SEED + 900000,
-        input_strength=INPUT_STRENGTH,
+        input_strength=INPUT_STRENGTH, neurons=neurons,
     )
     verification_keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 900001), num_trials)
     stage_call_completed = False
@@ -494,16 +510,18 @@ def _resolve_local_path(path):
     return ROOT / path
 
 
-def _weights():
+def _weights(neurons=None, weights_source=None):
     import jax.numpy as jnp
     from vwm_scratch.weights import initialize_weights
 
+    neurons = NEURONS if neurons is None else neurons
+    weights_source = WEIGHTS_SOURCE if weights_source is None else weights_source
     input_dim, output_dim = MAX_ITEMS * (3 if POSITIVE_INPUT else 2), MAX_ITEMS * 2
-    if WEIGHTS_SOURCE == "initialize":
-        source = initialize_weights(input_dim, NEURONS, output_dim, TAU_MIN_MS, TAU_MAX_MS,
+    if weights_source == "initialize":
+        source = initialize_weights(input_dim, neurons, output_dim, TAU_MIN_MS, TAU_MAX_MS,
                                     DALE_LAW, POSITIVE_INPUT, INITIALIZATION_SEED)
         return {name: jnp.asarray(getattr(source, name)) for name in ("B", "W", "F", "tau", "dale_sign")}
-    if WEIGHTS_SOURCE == "file":
+    if weights_source == "file":
         weights_path = _resolve_local_path(WEIGHTS_PATH)
         if not weights_path.is_file():
             raise FileNotFoundError(
@@ -512,8 +530,8 @@ def _weights():
             )
         data = np.load(weights_path)
         weights = {name: jnp.asarray(data[name]) for name in ("B", "W", "F", "tau", "dale_sign")}
-        if weights["B"].shape != (NEURONS, input_dim) or weights["F"].shape != (output_dim, NEURONS):
-            raise ValueError(f"Weight shapes do not match NEURONS={NEURONS}, MAX_ITEMS={MAX_ITEMS}")
+        if weights["B"].shape != (neurons, input_dim) or weights["F"].shape != (output_dim, neurons):
+            raise ValueError(f"Weight shapes do not match neurons={neurons}, MAX_ITEMS={MAX_ITEMS}")
         return weights
     raise ValueError("WEIGHTS_SOURCE must be 'initialize' or 'file'")
 
@@ -579,8 +597,9 @@ def _save_training_checkpoint(path, weights, optimizer_state, history, next_step
     temporary_path.replace(path)
 
 
-def _training_batch(jax, jnp, num_trials, item_numbers, seed, input_strength):
+def _training_batch(jax, jnp, num_trials, item_numbers, seed, input_strength, neurons=None):
     """Generate Derek's balanced 1..10 set-size batch without Python loops."""
+    neurons = NEURONS if neurons is None else neurons
     item_numbers = np.asarray(item_numbers, dtype=np.int32)
     counts = np.full(len(item_numbers), num_trials // len(item_numbers), dtype=np.int32)
     counts[: num_trials % len(item_numbers)] += 1
@@ -610,11 +629,12 @@ def _training_batch(jax, jnp, num_trials, item_numbers, seed, input_strength):
     times = jnp.arange(_steps()) * DT_MS
     mask = ((times >= INIT_MS) & (times < INIT_MS + STIMULUS_MS))[None, :, None]
     inputs = encoded[:, None, :] * mask * input_strength / MAX_ITEMS
-    return {"inputs": inputs, "initial": jnp.zeros((num_trials, NEURONS)), "theta": theta, "presence": presence, "set_sizes": jnp.asarray(set_sizes)}
+    return {"inputs": inputs, "initial": jnp.zeros((num_trials, neurons)), "theta": theta, "presence": presence, "set_sizes": jnp.asarray(set_sizes)}
 
 
-def _compiled_training_batch(jax, jnp, num_trials, item_numbers, input_strength):
+def _compiled_training_batch(jax, jnp, num_trials, item_numbers, input_strength, neurons=None):
     """Build one JIT batch sampler and reuse it for every training iteration."""
+    neurons = NEURONS if neurons is None else neurons
     item_numbers = np.asarray(item_numbers, dtype=np.int32)
     counts = np.full(len(item_numbers), num_trials // len(item_numbers), dtype=np.int32)
     counts[: num_trials % len(item_numbers)] += 1
@@ -648,7 +668,7 @@ def _compiled_training_batch(jax, jnp, num_trials, item_numbers, input_strength)
         inputs = encoded[:, None, :] * stimulus_mask[None, :, None] * input_strength / MAX_ITEMS
         return {
             "inputs": inputs,
-            "initial": jnp.zeros((num_trials, NEURONS), dtype=jnp.float32),
+            "initial": jnp.zeros((num_trials, neurons), dtype=jnp.float32),
             "theta": theta,
             "presence": presence,
             "set_sizes": set_sizes,
@@ -710,6 +730,7 @@ def _trial_report(weights=None, set_size=SET_SIZE, seed=RANDOM_SEED, noise_type=
 
     weights = _weights() if weights is None else weights
     key, theta, presence, inputs, initial = _trial_data(jax, jnp, set_size, seed, sensory_noise_rad, input_strength)
+    initial = jnp.zeros(weights["B"].shape[0])
     result = compiled_trial(weights, inputs, initial, DT_MS, SATURATION_RATE_HZ,
                             noise_type, noise_factor, key, store_states)
     # Training names deliberately match Derek (e.g. ``norml2``), while the
