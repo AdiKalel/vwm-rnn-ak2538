@@ -37,7 +37,7 @@ def _observed_state(key, rates, noise_type: str, noise_factor: float, dt_ms: flo
     if noise_type == "gamma":
         lam = (dt_ms / 1000.0) / noise_factor**2
         shape = jnp.maximum(rates * lam, 1e-10)
-        return jax.random.gamma(key, shape) / lam
+        return jax.random.gamma(key, shape, method="approximate") / lam
     if noise_type == "gaussian":
         noise = noise_factor * jnp.sqrt(rates * 1000.0 / dt_ms + 1e-10)
         return jnp.maximum(rates + noise * jax.random.normal(key, rates.shape), 0.0)
