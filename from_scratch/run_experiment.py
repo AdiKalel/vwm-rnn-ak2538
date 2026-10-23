@@ -857,7 +857,7 @@ if __name__ == "__main__":
     #print(f"saved graph to {RESULTS_DIR / 'loss_vs_set_size.png'}")
     print("check: total_loss - error_loss - activation_loss =", tloss - eloss - aloss)
     print('this is changed')
-    train(steps=100, show_plot=True, num_trials=300, item_numbers=(1,), logging_period=10, neurons = 256)
+    train(steps=1000, show_plot=True, num_trials=300, item_numbers=(1,), logging_period=10, neurons = 256)
     weights, history = train(
         steps=20,
         stage=1,

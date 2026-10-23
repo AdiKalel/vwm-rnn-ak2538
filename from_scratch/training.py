@@ -20,7 +20,8 @@ weights, history = train(
     stage=1,
     verification_period=100,
     neurons = 256,
-    show_plot=True
+    show_plot=True,
+    weights_source="initialise"
     )
 #weights, history = train(
  #   steps=2000,
