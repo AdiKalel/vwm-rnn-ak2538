@@ -337,11 +337,17 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             history["lr_reductions"].append(step)
             plateau_steps = 0
         if steps_without_improvement >= early_stop_patience:
+            plateau_reason = (
+                f"training loss did not improve for {early_stop_patience} steps "
+                f"(best={stage_best_value:.6g})"
+            )
             if stage is not None:
                 history["stage_completed"] = True
                 stage_call_completed = True
+                print(f"\nStopped early at step {step + 1}/{steps}: stage {stage} converged; {plateau_reason}.", flush=True)
                 break
             if current_stage + 1 < len(stage_levels):
+                print(f"\nStage {current_stage + 1} finished at step {step + 1}: {plateau_reason}; advancing to stage {current_stage + 2}.", flush=True)
                 current_stage += 1
                 stage_best_value = np.inf
                 steps_without_improvement = 0
@@ -349,6 +355,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
                 history["stage_switch_iters"].append(step)
             else:
                 history["training_completed"] = True
+                print(f"\nStopped early at step {step + 1}/{steps}: final stage converged; {plateau_reason}.", flush=True)
                 break
         if verification_period > 0 and ((step + 1) % verification_period == 0 or step == current_step):
             _, verification_aux = compiled_objective(
