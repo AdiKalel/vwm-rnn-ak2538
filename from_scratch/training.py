@@ -24,6 +24,15 @@ weights, history = train(
     show_plot=True,
     weights=_weights(256, "initialize"),
     )
+import json
+import matplotlib.pyplot as plt
+
+h = json.load(open(r"C:\Users\arkal\vwm_rnn\from_scratch\results\server_history.json"))
+plt.plot(h["total_losses"], label="training loss (every step)")
+plt.plot(h["iterations"], h["overall_errors"], label="eval angular error (logged steps)")
+plt.xlabel("Step")
+plt.legend()
+plt.show()
 #weights, history = train(
  #   steps=2000,
   #  stage=2,
