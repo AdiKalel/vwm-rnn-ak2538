@@ -19,7 +19,6 @@ from __future__ import annotations
 import sys
 import json
 import pickle
-import shutil
 import time
 import uuid
 import zipfile
@@ -110,8 +109,8 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
 
     The returned history contains overall and per-set-size training errors,
     evaluation errors, activation, learning rate, stage/noise, and best-step
-    metadata. Each call creates a unique ZIP in ``TRAINING_DATA_DIR`` with the
-    history, plot, best/final weights, latest checkpoint, and sparse snapshots.
+    metadata. Each call creates a unique visible directory in
+    ``TRAINING_DATA_DIR`` with the history, plot, weights, and checkpoints.
 
     Leave ``stage=None`` to use automatic stage transitions. Set ``stage=1``
     through ``stage=num_stages`` to train only that noise stage, then pass the
@@ -192,6 +191,9 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             with zipfile.ZipFile(resume_path) as archive:
                 with archive.open("latest_checkpoint.pkl") as file_handle:
                     checkpoint = pickle.load(file_handle)
+        elif resume_path.is_dir():
+            with (resume_path / "latest_checkpoint.pkl").open("rb") as file_handle:
+                checkpoint = pickle.load(file_handle)
         else:
             with resume_path.open("rb") as file_handle:
                 checkpoint = pickle.load(file_handle)
@@ -320,11 +322,10 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
     run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     archive_root = Path(TRAINING_DATA_DIR)
     archive_root.mkdir(parents=True, exist_ok=True)
-    run_dir = archive_root / f".{run_id}.work"
+    run_dir = archive_root / f"training_{run_id}"
     run_dir.mkdir()
-    archive_path = archive_root / f"training_{run_id}.zip"
     history["run_id"] = run_id
-    history["archive_path"] = str(archive_path)
+    history["run_directory"] = str(run_dir)
     profile_path = _resolve_local_path(profile_dir) if profile_dir is not None else None
     profile_started = False
     profile_finished = False
@@ -419,15 +420,15 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
                 history["group_std"][str(item)].append(group_stds[index])
                 history["group_activ"][str(item)].append(group_activations[index])
             (run_dir / "training_history.json").write_text(json.dumps(history, indent=2))
-            if step % 1000 == 0:
-                np.savez(run_dir / f"weights_iteration{step}.npz", **{name: np.asarray(x) for name, x in current.items()})
-        if checkpoint_period > 0 and ((step + 1) % checkpoint_period == 0 or step == steps - 1):
+        if checkpoint_period > 0 and (step + 1) % checkpoint_period == 0:
             _save_training_checkpoint(
                 run_dir / "latest_checkpoint.pkl", current, optimizer_state,
                 history, step + 1, current_stage, current_lr, stage_best_value,
                 global_best_value, steps_without_improvement, plateau_steps,
                 best_weights, stage_levels, train_signature,
             )
+            np.savez(run_dir / f"weights_checkpoint{step + 1}.npz",
+                     **{name: np.asarray(x) for name, x in current.items()})
         progress = [
             f"{datetime.now().astimezone().isoformat(timespec='seconds')}",
             f"training step {step + 1}/{steps}: total={value:.6g} "
@@ -457,8 +458,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
     # Completion means the final curriculum stage converged, not merely that
     # this invocation used its requested step budget.
     history["training_completed"] = bool(history.get("training_completed", False))
-    history["best_weights_path"] = f"{archive_path}::weights_best.npz"
-    np.savez(run_dir / "weights_best.npz", **{name: np.asarray(x) for name, x in best_weights.items()})
+    history["final_weights_path"] = str(run_dir / "weights_final.npz")
     np.savez(run_dir / "weights_final.npz", **{name: np.asarray(x) for name, x in current.items()})
     (run_dir / "training_history.json").write_text(json.dumps(history, indent=2))
     _plot_training(history, run_dir / "training_summary.png", show=show_plot)
@@ -469,14 +469,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         steps_without_improvement, plateau_steps, best_weights, stage_levels,
         train_signature,
     )
-    temporary_archive = archive_path.with_suffix(".zip.tmp")
-    with zipfile.ZipFile(temporary_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for file_path in run_dir.rglob("*"):
-            if file_path.is_file():
-                archive.write(file_path, file_path.relative_to(run_dir))
-    temporary_archive.replace(archive_path)
-    shutil.rmtree(run_dir)
-    print(f"Training session saved to {archive_path}", flush=True)
+    print(f"Training session saved to {run_dir}", flush=True)
     return best_weights, history
 
 

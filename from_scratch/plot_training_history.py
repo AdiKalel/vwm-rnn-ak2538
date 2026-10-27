@@ -15,6 +15,8 @@ LEGACY_HISTORY = ROOT / "results" / "training" / "training_history.json"
 
 def plot_history(history_path: Path, output_path: Path | None = None, show: bool = False) -> Path:
     history_path = Path(history_path)
+    if history_path.is_dir():
+        history_path = history_path / "training_history.json"
     if history_path.suffix.lower() == ".zip":
         with zipfile.ZipFile(history_path) as archive:
             history = json.loads(archive.read("training_history.json"))
@@ -40,8 +42,14 @@ def main() -> None:
 
     history_path = args.history
     if history_path is None:
+        runs = sorted(
+            (path for path in ARCHIVE_DIR.glob("training_*") if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+        )
         archives = sorted(ARCHIVE_DIR.glob("training_*.zip"), key=lambda path: path.stat().st_mtime)
-        history_path = archives[-1] if archives else LEGACY_HISTORY
+        history_path = runs[-1] if runs else (
+            archives[-1] if archives else LEGACY_HISTORY
+        )
     output = plot_history(history_path, args.output, args.show)
     print(f"Saved loss plot to {output}")
 

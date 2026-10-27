@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import sys
-import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -30,33 +29,40 @@ def test_training_updates_only_learned_matrices_and_resume_appends_steps(tmp_pat
     tau_before = np.asarray(initial["tau"]).copy()
     signs_before = np.asarray(initial["dale_sign"]).copy()
     trained, history = experiment.train(
-        steps=2,
+        steps=3,
         weights=initial,
         num_trials=4,
         item_numbers=(1, 2),
         logging_period=1,
+        checkpoint_period=2,
         show_plot=False,
         noise_type="none",
         noise_factor=0.0,
     )
-    assert history["iterations"] == [0, 1]
+    assert history["iterations"] == [0, 1, 2]
     assert not np.array_equal(np.asarray(trained["B"]), np.asarray(initial["B"]))
     assert not np.array_equal(np.asarray(trained["F"]), np.asarray(initial["F"]))
     assert np.array_equal(np.asarray(trained["tau"]), tau_before)
     assert np.array_equal(np.asarray(trained["dale_sign"]), signs_before)
     assert len(history["overall_train_errors"]) == len(history["iterations"])
     assert len(history["group_train_errors"]["1"]) == len(history["iterations"])
-    archive_path = Path(history["archive_path"])
-    assert archive_path.is_file()
-    with zipfile.ZipFile(archive_path) as archive:
-        names = set(archive.namelist())
-        assert {"training_history.json", "weights_best.npz", "weights_final.npz",
-                "latest_checkpoint.pkl", "training_summary.png"}.issubset(names)
-        saved_history = json.loads(archive.read("training_history.json"))
-        assert saved_history["group_train_errors"]["1"] == history["group_train_errors"]["1"]
+    run_directory = Path(history["run_directory"])
+    assert run_directory.is_dir()
+    assert not list(run_directory.parent.glob("*.zip"))
+    run_files = {path.name for path in run_directory.iterdir()}
+    assert {"training_history.json", "weights_final.npz", "latest_checkpoint.pkl",
+            "training_summary.png", "weights_checkpoint2.npz"}.issubset(
+                run_files
+            )
+    assert "weights_best.npz" not in run_files
+    assert "weights_checkpoint1.npz" not in run_files
+    assert "weights_checkpoint3.npz" not in run_files
+    assert not list(run_directory.glob("weights_iteration*.npz"))
+    saved_history = json.loads((run_directory / "training_history.json").read_text())
+    assert saved_history["group_train_errors"]["1"] == history["group_train_errors"]["1"]
 
     _, resumed = experiment.train(
-        steps=4,
+        steps=5,
         weights=trained,
         num_trials=4,
         item_numbers=(1, 2),
@@ -64,10 +70,10 @@ def test_training_updates_only_learned_matrices_and_resume_appends_steps(tmp_pat
         show_plot=False,
         noise_type="none",
         noise_factor=0.0,
-        resume_from=archive_path,
+        resume_from=run_directory,
     )
-    assert resumed["iterations"] == [0, 1, 2, 3]
-    assert resumed["archive_path"] != history["archive_path"]
+    assert resumed["iterations"] == [0, 1, 2, 3, 4]
+    assert resumed["run_directory"] != history["run_directory"]
 
 
 @pytest.mark.skipif(not jax_available, reason="JAX is not installed")
@@ -96,7 +102,7 @@ def test_manual_stage_promotion_preserves_history_and_marks_stage(tmp_path, monk
         steps=4, stage=2, num_stages=3, num_trials=4,
         item_numbers=(1, 2), logging_period=1, checkpoint_period=1,
         verification_period=1, show_plot=False, noise_type="none", noise_factor=0.3,
-        resume_from=stage_one["archive_path"],
+        resume_from=stage_one["run_directory"],
     )
     assert stage_two["stage"][-2:] == [1, 1]
     assert stage_two["stage_switch_iters"] == [2]
