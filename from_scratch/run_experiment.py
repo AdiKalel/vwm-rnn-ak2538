@@ -19,7 +19,10 @@ from __future__ import annotations
 import sys
 import json
 import pickle
+import shutil
 import time
+import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -68,7 +71,7 @@ TRAIN_ITEM_NUM = tuple(range(1, MAX_ITEMS + 1))
 TRAIN_LOGGING_PERIOD = 10
 TRAIN_CHECKPOINT_PERIOD = 100
 TRAIN_VERIFY_PERIOD = 100
-TRAIN_EARLY_STOP_PATIENCE = 150
+TRAIN_EARLY_STOP_PATIENCE = 300
 TRAIN_ADAPTIVE_LR_PATIENCE = 100
 TRAIN_LR_FACTOR = 0.5
 TRAIN_NUM_STAGES = 5
@@ -77,6 +80,7 @@ TRAIN_MIN_NOISE_FACTOR = 1e-3
 RESULTS_DIR = ROOT / "results"
 WEIGHTS_DIR = ROOT / "weights"
 TRAIN_SAVE_DIR = RESULTS_DIR / "training"
+TRAINING_DATA_DIR = RESULTS_DIR / "training_data"
 
 
 def CUSTOM_LOSS(predicted_output, target_output, presence):
@@ -104,10 +108,10 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         num_stages=TRAIN_NUM_STAGES, stage=None, resume_from=None):
     """Train with Derek's mixed-set-size curriculum and checkpoint behavior.
 
-    The returned history contains overall and per-set-size evaluation errors,
-    standard deviations, activation, learning rate, stage/noise, and best-step
-    metadata. Checkpoints and ``training_history.json`` are written under
-    ``TRAIN_SAVE_DIR`` every ``logging_period`` iterations.
+    The returned history contains overall and per-set-size training errors,
+    evaluation errors, activation, learning rate, stage/noise, and best-step
+    metadata. Each call creates a unique ZIP in ``TRAINING_DATA_DIR`` with the
+    history, plot, best/final weights, latest checkpoint, and sparse snapshots.
 
     Leave ``stage=None`` to use automatic stage transitions. Set ``stage=1``
     through ``stage=num_stages`` to train only that noise stage, then pass the
@@ -183,8 +187,14 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
     history["verification_errors"] = []
     best_weights = current
     if resume_from is not None:
-        with _resolve_local_path(resume_from).open("rb") as file_handle:
-            checkpoint = pickle.load(file_handle)
+        resume_path = _resolve_local_path(resume_from)
+        if resume_path.suffix.lower() == ".zip":
+            with zipfile.ZipFile(resume_path) as archive:
+                with archive.open("latest_checkpoint.pkl") as file_handle:
+                    checkpoint = pickle.load(file_handle)
+        else:
+            with resume_path.open("rb") as file_handle:
+                checkpoint = pickle.load(file_handle)
         if checkpoint["stage_noise_levels"] != stage_levels:
             raise ValueError("Checkpoint noise curriculum differs from current noise_factor or num_stages")
         if checkpoint.get("train_signature") != train_signature:
@@ -194,6 +204,10 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         trainable = {name: current[name] for name in ("B", "W", "F")}
         optimizer_state = jax.tree.map(jnp.asarray, checkpoint["optimizer_state"])
         history = checkpoint["history"]
+        history.setdefault("overall_train_errors", [None] * len(history.get("iterations", [])))
+        history.setdefault("group_train_errors", {
+            str(item): [None] * len(history.get("iterations", [])) for item in item_numbers
+        })
         current_step = checkpoint["next_step"]
         checkpoint_stage = checkpoint["current_stage"]
         if stage is None or stage == checkpoint_stage + 1:
@@ -240,8 +254,9 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         readouts = readouts[decode_start:]
         states = results["states"].transpose(1, 0, 2)
         target_output = _target_output(jnp, batch["theta"], batch["presence"])
-        train_mean, train_var, eval_mean, eval_var = training_loss(
-            readouts, target_output, batch["theta"], batch["presence"], training_error_type
+        train_mean, train_var, eval_mean, eval_var, trial_train_errors = training_loss(
+            readouts, target_output, batch["theta"], batch["presence"], training_error_type,
+            return_per_trial=True,
         )
         activation = jnp.mean(jnp.abs(states))
         total = LAMBDA_ERR * train_mean + LAMBDA_REG * activation
@@ -264,7 +279,12 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             jnp.maximum(jnp.sum(batch["set_sizes"] == item), 1)
             for item in item_numbers
         ])
-        return total, (train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations)
+        group_train_errors = jnp.stack([
+            jnp.sum(trial_train_errors * (batch["set_sizes"] == item)) /
+            jnp.maximum(jnp.sum(batch["set_sizes"] == item), 1)
+            for item in item_numbers
+        ])
+        return total, (train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations, group_train_errors)
 
     def trainable_objective(parameters, batch, keys, stage_noise):
         return objective({**parameters, **fixed_parameters}, batch, keys, stage_noise)
@@ -297,6 +317,14 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
     verification_keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 900001), num_trials)
     stage_call_completed = False
     starting_history_count = len(history["iterations"])
+    run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    archive_root = Path(TRAINING_DATA_DIR)
+    archive_root.mkdir(parents=True, exist_ok=True)
+    run_dir = archive_root / f".{run_id}.work"
+    run_dir.mkdir()
+    archive_path = archive_root / f"training_{run_id}.zip"
+    history["run_id"] = run_id
+    history["archive_path"] = str(archive_path)
     profile_path = _resolve_local_path(profile_dir) if profile_dir is not None else None
     profile_started = False
     profile_finished = False
@@ -352,7 +380,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
                 stage_best_value = np.inf
                 steps_without_improvement = 0
                 current_lr = learning_rate
-                history["stage_switch_iters"].append(step)
+                history["stage_switch_iters"].append(step + 1)
             else:
                 history["training_completed"] = True
                 print(f"\nStopped early at step {step + 1}/{steps}: final stage converged; {plateau_reason}.", flush=True)
@@ -367,7 +395,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             print()
             print(f"  verification at step {step + 1}: angular_error={validation_error:.6g}")
         if report_step:
-            train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations = aux
+            train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations, group_train_errors = aux
             group_errors = np.asarray(group_errors).tolist()
             group_stds = np.sqrt(np.asarray(group_vars)).tolist()
             group_activations = np.asarray(group_activations).tolist()
@@ -376,6 +404,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             ]
             history["iterations"].append(step)
             history["overall_errors"].append(eval_mean)
+            history.setdefault("overall_train_errors", []).append(train_mean)
             history["overall_std"].append(float(np.sqrt(eval_var)))
             history["overall_activ"].append(activation)
             history["lr"].append(current_lr)
@@ -384,14 +413,17 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             history["current_stage"] = current_stage
             for index, item in enumerate(item_numbers):
                 history["group_errors"][str(item)].append(group_errors[index])
+                history.setdefault("group_train_errors", {}).setdefault(str(item), []).append(
+                    float(group_train_errors[index])
+                )
                 history["group_std"][str(item)].append(group_stds[index])
                 history["group_activ"][str(item)].append(group_activations[index])
-            TRAIN_SAVE_DIR.mkdir(parents=True, exist_ok=True)
-            np.savez(TRAIN_SAVE_DIR / f"weights_iteration{step}.npz", **{name: np.asarray(x) for name, x in current.items()})
-            (TRAIN_SAVE_DIR / "training_history.json").write_text(json.dumps(history, indent=2))
+            (run_dir / "training_history.json").write_text(json.dumps(history, indent=2))
+            if step % 1000 == 0:
+                np.savez(run_dir / f"weights_iteration{step}.npz", **{name: np.asarray(x) for name, x in current.items()})
         if checkpoint_period > 0 and ((step + 1) % checkpoint_period == 0 or step == steps - 1):
             _save_training_checkpoint(
-                TRAIN_SAVE_DIR / "latest_checkpoint.pkl", current, optimizer_state,
+                run_dir / "latest_checkpoint.pkl", current, optimizer_state,
                 history, step + 1, current_stage, current_lr, stage_best_value,
                 global_best_value, steps_without_improvement, plateau_steps,
                 best_weights, stage_levels, train_signature,
@@ -413,8 +445,6 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
     if profile_started and not profile_finished:
         jax.profiler.stop_trace()
         print(f"JAX profile saved to {profile_path}", flush=True)
-    if show_plot:
-        _plot_training(history)
     history["stage_completed"] = history.get("stage_completed", False) or stage_call_completed
     history["steps_this_call"] = len(history["iterations"]) - starting_history_count
     history["requested_total_steps"] = steps
@@ -427,17 +457,26 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
     # Completion means the final curriculum stage converged, not merely that
     # this invocation used its requested step budget.
     history["training_completed"] = bool(history.get("training_completed", False))
-    history["best_weights_path"] = str(TRAIN_SAVE_DIR / "weights_best.npz")
-    TRAIN_SAVE_DIR.mkdir(parents=True, exist_ok=True)
-    np.savez(TRAIN_SAVE_DIR / "weights_best.npz", **{name: np.asarray(x) for name, x in best_weights.items()})
-    (TRAIN_SAVE_DIR / "training_history.json").write_text(json.dumps(history, indent=2))
+    history["best_weights_path"] = f"{archive_path}::weights_best.npz"
+    np.savez(run_dir / "weights_best.npz", **{name: np.asarray(x) for name, x in best_weights.items()})
+    np.savez(run_dir / "weights_final.npz", **{name: np.asarray(x) for name, x in current.items()})
+    (run_dir / "training_history.json").write_text(json.dumps(history, indent=2))
+    _plot_training(history, run_dir / "training_summary.png", show=show_plot)
     _save_training_checkpoint(
-        TRAIN_SAVE_DIR / "latest_checkpoint.pkl", current, optimizer_state,
+        run_dir / "latest_checkpoint.pkl", current, optimizer_state,
         history, (history["iterations"][-1] + 1) if history["iterations"] else current_step,
         current_stage, current_lr, stage_best_value, global_best_value,
         steps_without_improvement, plateau_steps, best_weights, stage_levels,
         train_signature,
     )
+    temporary_archive = archive_path.with_suffix(".zip.tmp")
+    with zipfile.ZipFile(temporary_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in run_dir.rglob("*"):
+            if file_path.is_file():
+                archive.write(file_path, file_path.relative_to(run_dir))
+    temporary_archive.replace(archive_path)
+    shutil.rmtree(run_dir)
+    print(f"Training session saved to {archive_path}", flush=True)
     return best_weights, history
 
 
@@ -557,6 +596,7 @@ def _new_history(item_numbers, stage_levels):
         "overall_errors": [],
         "overall_std": [],
         "overall_activ": [],
+        "overall_train_errors": [],
         "total_losses": [],
         "lr": [],
         "stage": [],
@@ -564,6 +604,7 @@ def _new_history(item_numbers, stage_levels):
         "stage_noise_levels": list(stage_levels),
         "stage_switch_iters": [],
         "group_errors": {str(item): [] for item in item_numbers},
+        "group_train_errors": {str(item): [] for item in item_numbers},
         "group_std": {str(item): [] for item in item_numbers},
         "group_activ": {str(item): [] for item in item_numbers},
         "lr_reductions": [],
@@ -767,45 +808,55 @@ def _trial_report(weights=None, set_size=SET_SIZE, seed=RANDOM_SEED, noise_type=
     }
 
 
-def _plot_training(history):
+def _plot_training(history, output_path=None, show=False):
+    import matplotlib
+
+    if not show:
+        matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = Path(output_path) if output_path is not None else RESULTS_DIR / "training_progress.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     iterations = history["iterations"]
-    figure, axes = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
-    axes[0].plot(iterations, history["overall_errors"], label="evaluation angular error")
-    axes[0].fill_between(
-        iterations,
-        np.asarray(history["overall_errors"]) - np.asarray(history["overall_std"]),
-        np.asarray(history["overall_errors"]) + np.asarray(history["overall_std"]),
-        alpha=0.2,
-        label="error +/- std",
-    )
-    axes[0].set_ylabel("Error (rad)")
+    figure, axes = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
+    overall_train_errors = history.get("overall_train_errors", [])
+    if overall_train_errors and any(value is not None for value in overall_train_errors):
+        axes[0].plot(iterations, overall_train_errors, color="black", linewidth=2.2, label="overall average")
+        for item, values in history.get("group_train_errors", {}).items():
+            axes[0].plot(iterations, values, linewidth=1.0, alpha=0.8, label=f"{item} item(s)")
+    else:
+        axes[0].plot(range(len(history.get("total_losses", []))), history.get("total_losses", []),
+                     color="black", linewidth=1.5, label="total training loss")
+    axes[0].set_ylabel("Training error loss")
     axes[0].grid(alpha=0.25)
-    axes[0].legend()
+    axes[0].legend(ncol=3, fontsize=8)
 
-    axes[1].plot(iterations, history["overall_activ"], color="tab:orange", label="mean absolute activation")
-    axes[1].set_ylabel("Activation")
+    axes[1].plot(iterations, history["overall_activ"], color="black", linewidth=2.2, label="overall average")
+    for item, values in history.get("group_activ", {}).items():
+        axes[1].plot(iterations, values, linewidth=1.0, alpha=0.8, label=f"{item} item(s)")
+    axes[1].set_ylabel("Mean absolute activation")
     axes[1].set_xlabel("Training iteration")
     axes[1].grid(alpha=0.25)
-    axes[1].legend()
-    figure.suptitle("Training progress")
-    figure.tight_layout()
-    figure.savefig(RESULTS_DIR / "training_progress.png", dpi=160)
-    plt.close(figure)
+    axes[1].legend(ncol=3, fontsize=8)
 
-    group_figure, group_axis = plt.subplots(figsize=(9, 5))
-    for item, values in history["group_errors"].items():
-        group_axis.plot(iterations, values, label=f"{item} item(s)")
-    group_axis.set_xlabel("Training iteration")
-    group_axis.set_ylabel("Evaluation angular error (rad)")
-    group_axis.set_title("Error by set size")
-    group_axis.grid(alpha=0.25)
-    group_axis.legend(ncol=2)
-    group_figure.tight_layout()
-    group_figure.savefig(RESULTS_DIR / "training_error_by_set_size.png", dpi=160)
-    plt.show()
+    boundaries = history.get("stage_switch_iters", [])
+    stage_levels = history.get("stage_noise_levels", [])
+    for stage_index, stage_start in enumerate([0, *boundaries]):
+        noise = stage_levels[min(stage_index, len(stage_levels) - 1)] if stage_levels else None
+        label = f"Stage {stage_index + 1}" + (f" | noise={noise:.4g}" if noise is not None else "")
+        for axis in axes:
+            if stage_start:
+                axis.axvline(stage_start, color="tab:red", linestyle="--", linewidth=1.0, alpha=0.7)
+        axes[0].text(stage_start, 0.98, label, transform=axes[0].get_xaxis_transform(),
+                     rotation=90, va="top", ha="right", fontsize=8, color="tab:red")
+
+    figure.suptitle("Training error and activation by set size")
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=160)
+    if show:
+        plt.show()
+    plt.close(figure)
+    return output_path
 
 
 if __name__ == "__main__":

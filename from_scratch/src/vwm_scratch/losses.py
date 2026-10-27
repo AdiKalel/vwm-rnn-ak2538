@@ -69,7 +69,7 @@ BUILTIN_LOSSES: dict[str, Callable[..., Any]] = {
 }
 
 
-def training_loss(readouts, target_output, target_theta, presence, error_type):
+def training_loss(readouts, target_output, target_theta, presence, error_type, return_per_trial=False):
     """Match Derek's training losses for readouts [time, batch, output]."""
     jnp = _jax()
     steps = readouts.shape[0]
@@ -96,7 +96,8 @@ def training_loss(readouts, target_output, target_theta, presence, error_type):
     decoded = jnp.arctan2(predicted.mean(axis=0)[..., 1], predicted.mean(axis=0)[..., 0])
     eval_error = circular_difference(decoded, target_theta)
     eval_per_trial = jnp.sum(jnp.abs(eval_error) * presence, axis=-1) / jnp.sum(presence, axis=-1)
-    return train_mean, train_var, jnp.mean(eval_per_trial), jnp.var(eval_per_trial, ddof=1)
+    result = (train_mean, train_var, jnp.mean(eval_per_trial), jnp.var(eval_per_trial, ddof=1))
+    return (*result, per_trial) if return_per_trial else result
 
 
 def get_loss(name: str, custom_loss: Callable[..., Any] | None = None):
