@@ -43,7 +43,7 @@ INITIALIZATION_SEED = 7
 MAX_ITEMS = 10
 NEURONS = 256
 DT_MS = 10.0
-TAU_MIN_MS, TAU_MAX_MS = 10.0, 30.0
+TAU_MIN_MS, TAU_MAX_MS = 50.0, 300.0
 POSITIVE_INPUT = True
 DALE_LAW = True
 SATURATION_RATE_HZ = 60.0
@@ -255,10 +255,10 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
     history["tau_schedule_target_range_ms"] = (
         list(tau_final_range) if tau_final_range is not None else None
     )
-    history["tau_schedule_stage_ranges_ms"] = [
+    history["tau_schedule_stage_end_ranges_ms"] = [
         [
-            float(np.min(_compress_tau_distribution(tau_base, tau_final_range, stage_index / max(len(stage_levels) - 1, 1)))),
-            float(np.max(_compress_tau_distribution(tau_base, tau_final_range, stage_index / max(len(stage_levels) - 1, 1)))),
+            float(np.min(_compress_tau_distribution(tau_base, tau_final_range, (stage_index + 1) / len(stage_levels)))),
+            float(np.max(_compress_tau_distribution(tau_base, tau_final_range, (stage_index + 1) / len(stage_levels)))),
         ]
         for stage_index in range(len(stage_levels))
     ] if tau_final_range is not None else []
@@ -369,10 +369,15 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             profile_started = True
         batch = batch_generator(jax.random.PRNGKey(RANDOM_SEED + step))
         keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 100000 + step), num_trials)
+        stage_start_step = max(
+            (boundary for boundary in history.get("stage_switch_iters", []) if boundary <= step + 1),
+            default=0,
+        )
         tau_progress = (
-            current_stage / (len(stage_levels) - 1)
-            if tau_final_range is not None and len(stage_levels) > 1
-            else (min(step / max(steps - 1, 1), 1.0) if tau_final_range is not None else 0.0)
+            _tau_schedule_progress(
+                current_stage, step + 1 - stage_start_step, early_stop_patience, len(stage_levels)
+            )
+            if tau_final_range is not None else 0.0
         )
         current_tau = jnp.asarray(
             _compress_tau_distribution(tau_base, tau_final_range, tau_progress)
@@ -635,6 +640,14 @@ def _compress_tau_distribution(base_tau, final_range, progress):
     progress = float(np.clip(progress, 0.0, 1.0))
     scheduled_log_tau = log_tau + progress * (target_log_tau - log_tau)
     return np.exp(scheduled_log_tau).astype(np.float32)
+
+
+def _tau_schedule_progress(stage_index, steps_in_stage, stage_duration, stage_count):
+    """Advance tau compression smoothly from one noise stage to the next."""
+    stage_duration = max(int(stage_duration), 1)
+    stage_count = max(int(stage_count), 1)
+    within_stage = float(np.clip(steps_in_stage / stage_duration, 0.0, 1.0))
+    return float(np.clip((stage_index + within_stage) / stage_count, 0.0, 1.0))
 
 
 def _new_history(item_numbers, stage_levels):

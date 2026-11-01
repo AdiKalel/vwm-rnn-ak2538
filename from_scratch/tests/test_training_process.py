@@ -101,9 +101,11 @@ def test_manual_stage_promotion_preserves_history_and_marks_stage(tmp_path, monk
     assert stage_one["stage_budget_exhausted"]
     assert not stage_one["training_completed"]
     assert stage_one["verification_steps"] == [1, 2]
-    assert stage_one["tau_schedule_stage_ranges_ms"][0][0] == pytest.approx(
-        float(np.min(np.asarray(initial["tau"])))
-    )
+    assert stage_one["tau_schedule_stage_end_ranges_ms"][0][0] > 10.0
+    assert stage_one["tau_schedule_stage_end_ranges_ms"][0][1] < float(np.max(np.asarray(initial["tau"])))
+    stage_one_final = np.load(stage_one["final_weights_path"])
+    assert np.min(stage_one_final["tau"]) > 10.0
+    assert np.max(stage_one_final["tau"]) < np.max(np.asarray(initial["tau"]))
 
     _, stage_two = experiment.train(
         steps=4, stage=2, num_stages=3, num_trials=4,
@@ -116,8 +118,10 @@ def test_manual_stage_promotion_preserves_history_and_marks_stage(tmp_path, monk
     assert stage_two["stage_switch_iters"] == [2]
     assert stage_two["iterations"] == [0, 1, 2, 3]
     assert not stage_two["training_completed"]
-    assert stage_two["tau_schedule_stage_ranges_ms"][1][0] > 10.0
-    assert stage_two["tau_schedule_stage_ranges_ms"][1][1] < float(np.max(np.asarray(initial["tau"])))
+    assert stage_two["tau_schedule_stage_end_ranges_ms"][1][0] > 10.0
+    assert stage_two["tau_schedule_stage_end_ranges_ms"][1][1] < float(
+        stage_two["tau_schedule_stage_end_ranges_ms"][0][1]
+    )
 
 
 def test_tau_compression_preserves_quantile_order_and_target_range():
@@ -129,3 +133,7 @@ def test_tau_compression_preserves_quantile_order_and_target_range():
     assert compressed.min() == pytest.approx(10.0)
     assert compressed.max() == pytest.approx(30.0)
     assert np.all(np.diff(compressed) > 0)
+    assert experiment._tau_schedule_progress(0, 0, 300, 5) == pytest.approx(0.0)
+    assert experiment._tau_schedule_progress(0, 150, 300, 5) == pytest.approx(0.1)
+    assert experiment._tau_schedule_progress(0, 300, 300, 5) == pytest.approx(0.2)
+    assert experiment._tau_schedule_progress(4, 300, 300, 5) == pytest.approx(1.0)
