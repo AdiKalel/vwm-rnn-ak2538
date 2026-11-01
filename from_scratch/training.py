@@ -20,5 +20,5 @@ weights, history = train(
     verification_period=100,
     neurons = 256,
     show_plot=True,
-    weights=_weights(256, "file"),
+    weights=_weights(256, "initialize"),
     )

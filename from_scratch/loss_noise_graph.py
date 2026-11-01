@@ -34,14 +34,14 @@ for i in range(10):
     # store_states=False is only valid when plotting error/total loss.
     total_eloss = 0
     total_aloss = 0
-    for j in range(10):
-        report = run_trial(weights=weights, set_size= 2, seed=i*100 + j, store_states=True, noise_factor=0.1 * i)
+    for j in range(100):
+        report = run_trial(weights=weights, set_size= j%10 + 1, seed=i*100 + j, store_states=True, noise_factor=0.1 * i)
         total_eloss += report["error_loss"]
-        print(f"set_size={2}, seed={i*100 + j}, error_loss={report['error_loss']:.6g}, activation_loss={report['activation_loss']:.6g}")
+        print(f"set_size={j%10 + 1}, seed={i*100 + j}, error_loss={report['error_loss']:.6g}, activation_loss={report['activation_loss']:.6g}")
         total_aloss += report["activation_loss"]
-    eloss[i] = total_eloss / 10
-    tloss[i] = (total_eloss + total_aloss) / 10
-    aloss[i] = total_aloss / 10
+    eloss[i] = total_eloss / 100
+    tloss[i] = (total_eloss + total_aloss) / 100
+    aloss[i] = total_aloss / 100
     noise[i] = 0.1 * i
 
 plt.plot(noise, eloss, label="error loss")

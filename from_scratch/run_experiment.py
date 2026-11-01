@@ -36,14 +36,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 # Use "file" for trained weights or "initialize" for new untrained weights.
 WEIGHTS_SOURCE = "file"
-WEIGHTS_PATH = ROOT / "weights" / "adi_rad_n256_gamma03.npz"
+WEIGHTS_PATH = ROOT / "weights" / "weights_final_retrained.npz"
 INITIALIZATION_SEED = 7
 
 # Architecture and timing.
 MAX_ITEMS = 10
 NEURONS = 256
 DT_MS = 10.0
-TAU_MIN_MS, TAU_MAX_MS = 50.0, 300.0
+TAU_MIN_MS, TAU_MAX_MS = 10.0, 30.0
 POSITIVE_INPUT = True
 DALE_LAW = True
 SATURATION_RATE_HZ = 60.0
