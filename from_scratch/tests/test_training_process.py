@@ -38,6 +38,7 @@ def test_training_updates_only_learned_matrices_and_resume_appends_steps(tmp_pat
         show_plot=False,
         noise_type="none",
         noise_factor=0.0,
+        tau_final_range=None,
     )
     assert history["iterations"] == [0, 1, 2]
     assert not np.array_equal(np.asarray(trained["B"]), np.asarray(initial["B"]))
@@ -71,6 +72,7 @@ def test_training_updates_only_learned_matrices_and_resume_appends_steps(tmp_pat
         noise_type="none",
         noise_factor=0.0,
         resume_from=run_directory,
+        tau_final_range=None,
     )
     assert resumed["iterations"] == [0, 1, 2, 3, 4]
     assert resumed["run_directory"] != history["run_directory"]
@@ -87,24 +89,43 @@ def test_manual_stage_promotion_preserves_history_and_marks_stage(tmp_path, monk
     monkeypatch.setattr(experiment, "TRAINING_DATA_DIR", tmp_path / "training_data")
     monkeypatch.setattr(experiment, "RESULTS_DIR", tmp_path)
     initial = experiment._weights()
+    initial["tau"] = experiment._jax()[1].asarray(np.linspace(50.0, 300.0, 8, dtype=np.float32))
 
     _, stage_one = experiment.train(
         steps=2, stage=1, num_stages=3, weights=initial, num_trials=4,
         item_numbers=(1, 2), logging_period=1, checkpoint_period=1,
         verification_period=1, show_plot=False, noise_type="none", noise_factor=0.3,
+        tau_final_range=(10.0, 30.0),
     )
     assert stage_one["stage"] == [0, 0]
     assert stage_one["stage_budget_exhausted"]
     assert not stage_one["training_completed"]
     assert stage_one["verification_steps"] == [1, 2]
+    assert stage_one["tau_schedule_stage_ranges_ms"][0][0] == pytest.approx(
+        float(np.min(np.asarray(initial["tau"])))
+    )
 
     _, stage_two = experiment.train(
         steps=4, stage=2, num_stages=3, num_trials=4,
         item_numbers=(1, 2), logging_period=1, checkpoint_period=1,
         verification_period=1, show_plot=False, noise_type="none", noise_factor=0.3,
         resume_from=stage_one["run_directory"],
+        tau_final_range=(10.0, 30.0),
     )
     assert stage_two["stage"][-2:] == [1, 1]
     assert stage_two["stage_switch_iters"] == [2]
     assert stage_two["iterations"] == [0, 1, 2, 3]
     assert not stage_two["training_completed"]
+    assert stage_two["tau_schedule_stage_ranges_ms"][1][0] > 10.0
+    assert stage_two["tau_schedule_stage_ranges_ms"][1][1] < float(np.max(np.asarray(initial["tau"])))
+
+
+def test_tau_compression_preserves_quantile_order_and_target_range():
+    sys.path.insert(0, str(ROOT))
+    import run_experiment as experiment
+
+    original_tau = np.array([50.0, 75.0, 150.0, 300.0], dtype=np.float32)
+    compressed = experiment._compress_tau_distribution(original_tau, (10.0, 30.0), 1.0)
+    assert compressed.min() == pytest.approx(10.0)
+    assert compressed.max() == pytest.approx(30.0)
+    assert np.all(np.diff(compressed) > 0)

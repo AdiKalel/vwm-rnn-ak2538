@@ -75,6 +75,7 @@ TRAIN_ADAPTIVE_LR_PATIENCE = 100
 TRAIN_LR_FACTOR = 0.5
 TRAIN_NUM_STAGES = 5
 TRAIN_MIN_NOISE_FACTOR = 1e-3
+TRAIN_TAU_FINAL_RANGE_MS = (10.0, 30.0)
 
 RESULTS_DIR = ROOT / "results"
 WEIGHTS_DIR = ROOT / "weights"
@@ -104,7 +105,8 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         profile_dir=None, profile_steps=3,
         early_stop_patience=TRAIN_EARLY_STOP_PATIENCE,
         adaptive_lr_patience=TRAIN_ADAPTIVE_LR_PATIENCE,
-        num_stages=TRAIN_NUM_STAGES, stage=None, resume_from=None):
+          num_stages=TRAIN_NUM_STAGES, stage=None, resume_from=None,
+          tau_final_range=TRAIN_TAU_FINAL_RANGE_MS):
     """Train with Derek's mixed-set-size curriculum and checkpoint behavior.
 
     The returned history contains overall and per-set-size training errors,
@@ -122,6 +124,8 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
 
     ``neurons`` sets the network size. Without ``weights``, any size other than
     ``NEURONS`` starts from fresh initialization; supplied ``weights`` fix it.
+    ``tau_final_range`` progressively compresses the loaded tau distribution
+    by noise stage; pass ``None`` to keep tau fixed.
     """
     jax, jnp, optax = _jax()
     from vwm_scratch.losses import training_loss
@@ -143,7 +147,8 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             weights_source = "initialize"
             print(f"Initializing fresh {neurons}-neuron weights (the weights file has {NEURONS}).")
         current = _weights(neurons, weights_source)
-    fixed_parameters = {name: current[name] for name in ("tau", "dale_sign")}
+    tau_base = np.asarray(current["tau"], dtype=np.float32)
+    fixed_parameters = {"dale_sign": current["dale_sign"]}
     trainable = {name: current[name] for name in ("B", "W", "F")}
     if loss_type == "custom":
         raise ValueError("Custom loss training requires adding it to training_loss in losses.py")
@@ -156,6 +161,10 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         stage_levels = [noise_factor]
     else:
         stage_levels = np.geomspace(TRAIN_MIN_NOISE_FACTOR, noise_factor, num_stages).tolist()
+    if tau_final_range is not None:
+        tau_final_range = tuple(float(value) for value in tau_final_range)
+        if len(tau_final_range) != 2 or not 0.0 < tau_final_range[0] <= tau_final_range[1]:
+            raise ValueError("tau_final_range must be a positive (minimum_ms, maximum_ms) pair or None")
     train_signature = {
         "loss_type": loss_type,
         "learning_rate": learning_rate,
@@ -169,6 +178,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         "input_strength": INPUT_STRENGTH,
         "max_items": MAX_ITEMS,
         "neurons": neurons,
+        "tau_final_range": list(tau_final_range) if tau_final_range is not None else None,
     }
     if stage is not None and not 1 <= stage <= len(stage_levels):
         raise ValueError(f"stage must be between 1 and {len(stage_levels)}")
@@ -202,7 +212,12 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         if checkpoint.get("train_signature") != train_signature:
             raise ValueError("Checkpoint training settings differ; resume with the original loss, batch, noise, and model settings")
         current = {name: jnp.asarray(value) for name, value in checkpoint["weights"].items()}
-        fixed_parameters = {name: current[name] for name in ("tau", "dale_sign")}
+        fixed_parameters = {"dale_sign": current["dale_sign"]}
+        if tau_final_range is not None:
+            tau_base = np.asarray(
+                checkpoint["history"].get("tau_schedule_base_ms", current["tau"]),
+                dtype=np.float32,
+            )
         trainable = {name: current[name] for name in ("B", "W", "F")}
         optimizer_state = jax.tree.map(jnp.asarray, checkpoint["optimizer_state"])
         history = checkpoint["history"]
@@ -236,6 +251,18 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         global_best_value = checkpoint["global_best_value"]
         best_weights = {name: jnp.asarray(value) for name, value in checkpoint["best_weights"].items()}
 
+    history["tau_schedule_base_ms"] = tau_base.tolist()
+    history["tau_schedule_target_range_ms"] = (
+        list(tau_final_range) if tau_final_range is not None else None
+    )
+    history["tau_schedule_stage_ranges_ms"] = [
+        [
+            float(np.min(_compress_tau_distribution(tau_base, tau_final_range, stage_index / max(len(stage_levels) - 1, 1)))),
+            float(np.max(_compress_tau_distribution(tau_base, tau_final_range, stage_index / max(len(stage_levels) - 1, 1)))),
+        ]
+        for stage_index in range(len(stage_levels))
+    ] if tau_final_range is not None else []
+
     training_error_type = {
         "angular": "rad",
         "euclidean": "l2",
@@ -243,11 +270,12 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         "exponential": "exp",
     }.get(loss_type, loss_type)
 
-    def objective(parameters, batch, keys, stage_noise):
+    def objective(parameters, batch, keys, stage_noise, tau):
         decode_start = int((INIT_MS + STIMULUS_MS + DELAY_MS) / DT_MS)
+        full_parameters = {**parameters, **fixed_parameters, "tau": tau}
         results = jax.vmap(
             lambda inputs, initial, key: jax_run_trial(
-                parameters, inputs, initial, DT_MS, SATURATION_RATE_HZ,
+                full_parameters, inputs, initial, DT_MS, SATURATION_RATE_HZ,
                 noise_type, stage_noise, key, True, decode_start
             )
         )(batch["inputs"], batch["initial"], keys)
@@ -288,12 +316,12 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
         ])
         return total, (train_mean, train_var, eval_mean, eval_var, activation, group_errors, group_vars, group_activations, group_train_errors)
 
-    def trainable_objective(parameters, batch, keys, stage_noise):
-        return objective({**parameters, **fixed_parameters}, batch, keys, stage_noise)
+    def trainable_objective(parameters, batch, keys, stage_noise, tau):
+        return objective(parameters, batch, keys, stage_noise, tau)
 
-    def compiled_update(parameters, state, batch, keys, stage_noise, lr):
+    def compiled_update(parameters, state, batch, keys, stage_noise, lr, tau):
         (loss, aux), gradients = jax.value_and_grad(trainable_objective, has_aux=True)(
-            parameters, batch, keys, stage_noise
+            parameters, batch, keys, stage_noise, tau
         )
         updates, state = optimizer.update(gradients, state, parameters)
         updates = jax.tree.map(lambda update: -lr * update, updates)
@@ -341,10 +369,19 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
             profile_started = True
         batch = batch_generator(jax.random.PRNGKey(RANDOM_SEED + step))
         keys = jax.random.split(jax.random.PRNGKey(RANDOM_SEED + 100000 + step), num_trials)
-        trainable, optimizer_state, value, aux = compiled_update(
-            trainable, optimizer_state, batch, keys, stage_levels[current_stage], current_lr
+        tau_progress = (
+            current_stage / (len(stage_levels) - 1)
+            if tau_final_range is not None and len(stage_levels) > 1
+            else (min(step / max(steps - 1, 1), 1.0) if tau_final_range is not None else 0.0)
         )
-        current = {**trainable, **fixed_parameters}
+        current_tau = jnp.asarray(
+            _compress_tau_distribution(tau_base, tau_final_range, tau_progress)
+            if tau_final_range is not None else tau_base
+        )
+        trainable, optimizer_state, value, aux = compiled_update(
+            trainable, optimizer_state, batch, keys, stage_levels[current_stage], current_lr, current_tau
+        )
+        current = {**trainable, **fixed_parameters, "tau": current_tau}
         value = float(value)
         report_step = step % logging_period == 0 or step == steps - 1
         eval_display = float(aux[2]) if report_step else None
@@ -388,7 +425,7 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
                 break
         if verification_period > 0 and ((step + 1) % verification_period == 0 or step == current_step):
             _, verification_aux = compiled_objective(
-                trainable, verification_batch, verification_keys, 0.0
+                trainable, verification_batch, verification_keys, 0.0, current_tau
             )
             validation_error = float(verification_aux[2])
             history["verification_steps"].append(step + 1)
@@ -580,6 +617,24 @@ def _steps():
     if total % DT_MS:
         raise ValueError("Total duration must be divisible by DT_MS")
     return int(total / DT_MS)
+
+
+def _compress_tau_distribution(base_tau, final_range, progress):
+    """Compress log-tau quantiles into a target range without reordering neurons."""
+    base_tau = np.asarray(base_tau, dtype=np.float64)
+    if final_range is None:
+        return base_tau.astype(np.float32)
+    target_min, target_max = final_range
+    log_tau = np.log(base_tau)
+    log_min, log_max = float(log_tau.min()), float(log_tau.max())
+    if log_max == log_min:
+        quantiles = np.full_like(log_tau, 0.5)
+    else:
+        quantiles = (log_tau - log_min) / (log_max - log_min)
+    target_log_tau = np.log(target_min) + quantiles * (np.log(target_max) - np.log(target_min))
+    progress = float(np.clip(progress, 0.0, 1.0))
+    scheduled_log_tau = log_tau + progress * (target_log_tau - log_tau)
+    return np.exp(scheduled_log_tau).astype(np.float32)
 
 
 def _new_history(item_numbers, stage_levels):
