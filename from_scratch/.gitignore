@@ -6,3 +6,6 @@ __pycache__/
 results/
 comparison_results/*.npz
 results/*.npz
+
+.venv-jax/
+.venv-jax312/
