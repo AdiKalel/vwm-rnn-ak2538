@@ -720,10 +720,11 @@ def _compiled_training_batch(jax, jnp, num_trials, item_numbers, input_strength,
 
 def _trial_data(jax, jnp, set_size, seed, sensory_noise_rad=SENSORY_NOISE_RAD,
                 input_strength=INPUT_STRENGTH):
-    key = jax.random.PRNGKey(seed)
-    theta = jax.random.uniform(key, (MAX_ITEMS,), minval=-jnp.pi, maxval=jnp.pi)
+    root_key = jax.random.PRNGKey(seed)
+    theta_key, sensory_key, dynamics_key = jax.random.split(root_key, 3)
+    theta = jax.random.uniform(theta_key, (MAX_ITEMS,), minval=-jnp.pi, maxval=jnp.pi)
     presence = jnp.concatenate((jnp.ones(set_size), jnp.zeros(MAX_ITEMS - set_size)))
-    theta_input = theta + sensory_noise_rad * jax.random.normal(key, theta.shape)
+    theta_input = theta + sensory_noise_rad * jax.random.normal(sensory_key, theta.shape)
     if POSITIVE_INPUT:
         encoded = jnp.stack((
             1 + jnp.cos(theta_input) / jnp.sqrt(2) + jnp.sin(theta_input) / jnp.sqrt(6),
@@ -735,7 +736,7 @@ def _trial_data(jax, jnp, set_size, seed, sensory_noise_rad=SENSORY_NOISE_RAD,
     encoded = (encoded * presence[:, None]).reshape(-1)
     times = jnp.arange(_steps()) * DT_MS
     mask = ((times >= INIT_MS) & (times < INIT_MS + STIMULUS_MS))[:, None]
-    return key, theta, presence, encoded[None, :] * mask * input_strength / MAX_ITEMS, jnp.zeros(NEURONS)
+    return dynamics_key, theta, presence, encoded[None, :] * mask * input_strength / MAX_ITEMS, jnp.zeros(NEURONS)
 
 
 def _target_output(jnp, theta, presence):
