@@ -22,5 +22,5 @@ weights, history = train(
     show_plot=True,
     weights=_weights(256, "file"),
     num_trials=600,
-    tau_final_range=(15.0, 140.0)
+    tau_final_range=(50.0, 200.0)
     )
