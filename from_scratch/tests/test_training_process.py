@@ -52,12 +52,11 @@ def test_training_updates_only_learned_matrices_and_resume_appends_steps(tmp_pat
     assert not list(run_directory.parent.glob("*.zip"))
     run_files = {path.name for path in run_directory.iterdir()}
     assert {"training_history.json", "weights_final.npz", "latest_checkpoint.pkl",
-            "training_summary.png", "weights_checkpoint2.npz"}.issubset(
+            "training_summary.png"}.issubset(
                 run_files
             )
     assert "weights_best.npz" not in run_files
-    assert "weights_checkpoint1.npz" not in run_files
-    assert "weights_checkpoint3.npz" not in run_files
+    assert not list(run_directory.glob("weights_checkpoint*.npz"))
     assert not list(run_directory.glob("weights_iteration*.npz"))
     saved_history = json.loads((run_directory / "training_history.json").read_text())
     assert saved_history["group_train_errors"]["1"] == history["group_train_errors"]["1"]
@@ -76,6 +75,8 @@ def test_training_updates_only_learned_matrices_and_resume_appends_steps(tmp_pat
     )
     assert resumed["iterations"] == [0, 1, 2, 3, 4]
     assert resumed["run_directory"] != history["run_directory"]
+    assert not run_directory.exists()
+    assert len(list(Path(resumed["run_directory"]).parent.glob("training_*"))) == 1
 
 
 @pytest.mark.skipif(not jax_available, reason="JAX is not installed")
@@ -103,9 +104,9 @@ def test_manual_stage_promotion_preserves_history_and_marks_stage(tmp_path, monk
     assert stage_one["verification_steps"] == [1, 2]
     assert stage_one["tau_schedule_stage_end_ranges_ms"][0][0] > 10.0
     assert stage_one["tau_schedule_stage_end_ranges_ms"][0][1] < float(np.max(np.asarray(initial["tau"])))
-    stage_one_final = np.load(stage_one["final_weights_path"])
-    assert np.min(stage_one_final["tau"]) > 10.0
-    assert np.max(stage_one_final["tau"]) < np.max(np.asarray(initial["tau"]))
+    with np.load(stage_one["final_weights_path"]) as stage_one_final:
+        assert np.min(stage_one_final["tau"]) > 10.0
+        assert np.max(stage_one_final["tau"]) < np.max(np.asarray(initial["tau"]))
 
     _, stage_two = experiment.train(
         steps=4, stage=2, num_stages=3, num_trials=4,

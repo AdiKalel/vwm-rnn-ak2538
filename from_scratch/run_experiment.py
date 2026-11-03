@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 import json
 import pickle
+import shutil
 import time
 import uuid
 import zipfile
@@ -111,8 +112,8 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
 
     The returned history contains overall and per-set-size training errors,
     evaluation errors, activation, learning rate, stage/noise, and best-step
-    metadata. Each call creates a unique visible directory in
-    ``TRAINING_DATA_DIR`` with the history, plot, weights, and checkpoints.
+    metadata. Each call replaces earlier runs in ``TRAINING_DATA_DIR`` with a
+    new directory holding the history, plot, final weights, and resume checkpoint.
 
     Leave ``stage=None`` to use automatic stage transitions. Set ``stage=1``
     through ``stage=num_stages`` to train only that noise stage, then pass the
@@ -350,6 +351,9 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
     run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     archive_root = Path(TRAINING_DATA_DIR)
     archive_root.mkdir(parents=True, exist_ok=True)
+    # The resume checkpoint is already in memory, so older runs can be replaced.
+    for old_run in archive_root.glob("training_*"):
+        shutil.rmtree(old_run) if old_run.is_dir() else old_run.unlink()
     run_dir = archive_root / f"training_{run_id}"
     run_dir.mkdir()
     history["run_id"] = run_id
@@ -469,8 +473,6 @@ def train(*, steps=TRAIN_STEPS, weights=None, neurons=None, loss_type=LOSS_TYPE,
                 global_best_value, steps_without_improvement, plateau_steps,
                 best_weights, stage_levels, train_signature,
             )
-            np.savez(run_dir / f"weights_checkpoint{step + 1}.npz",
-                     **{name: np.asarray(x) for name, x in current.items()})
         progress = [
             f"{datetime.now().astimezone().isoformat(timespec='seconds')}",
             f"training step {step + 1}/{steps}: total={value:.6g} "
