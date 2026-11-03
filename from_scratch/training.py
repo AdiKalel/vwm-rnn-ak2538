@@ -14,11 +14,13 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_experiment import RESULTS_DIR, _weights, run_trial, train
 
-print("Starting retraining..")
+print("Starting retraining with tau_final_range=(15.0, 140.0)..")
 #train(steps=100, show_plot=True, num_trials=300, item_numbers=(1,), logging_period=10, neurons = 256)
 weights, history = train(
     verification_period=100,
     neurons = 256,
     show_plot=True,
     weights=_weights(256, "file"),
+    num_trials=1000,
+    tau_final_range=(15.0, 140.0)
     )

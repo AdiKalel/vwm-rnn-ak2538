@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 # Use "file" for trained weights or "initialize" for new untrained weights.
 WEIGHTS_SOURCE = "file"
-WEIGHTS_PATH = ROOT / "weights" / "weights_final_retrained.npz"
+WEIGHTS_PATH = ROOT / "weights" / "weights_final_tau150.npz"
 INITIALIZATION_SEED = 7
 
 # Architecture and timing.
